@@ -207,10 +207,14 @@ lv_obj_t* makeBox(lv_obj_t* parent) {
 
 void showSuggestions(const char* const* words, size_t n) {
     lv_obj_clean(suggestBox);
-    // words[0] уже набрано — показываем остальные варианты
-    for (size_t i = 1; i < n; i++) {
+    // words[0] уже отправлено — первым и подсвеченным, дальше варианты на замену
+    for (size_t i = 0; i < n; i++) {
         lv_obj_t* b = makeBarButton(suggestBox, words[i], onSuggestion, reinterpret_cast<void*>(uintptr_t(i)));
         lv_obj_set_style_pad_hor(b, 6, 0);
+        lv_obj_t* l = lv_obj_get_child(b, 0);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_max_width(l, 56, 0);
+        if (i == 0) lv_obj_add_state(b, LV_STATE_CHECKED);
     }
     bool show = n > 1;
     if (show) {
