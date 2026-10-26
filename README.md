@@ -167,8 +167,20 @@ pio run
 | `src/touch.*`, `src/display.*` | драйверы тача GT911 и экрана NV3041A, LVGL |
 | `src/settings.*` | настройки во flash (NVS) |
 
-## Лицензии сторонних частей
+## Лицензия
 
-- Словари: FrequencyWords, CC BY-SA 4.0.
-- Шрифт Roboto: Apache License 2.0. Значки: Font Awesome Free (SIL OFL 1.1), через LVGL.
-- Библиотеки: LVGL (MIT), Arduino_GFX (BSD), NimBLE-Arduino (Apache 2.0), Arduino-ESP32 (LGPL 2.1).
+Прошивка распространяется под лицензией [MIT](LICENSE): её можно свободно использовать, менять и распространять, в том числе в коммерческих проектах, сохраняя уведомление об авторских правах.
+
+У сторонних частей свои лицензии:
+
+| Что | Лицензия |
+|---|---|
+| Словари `src/dict_*.c` (из [FrequencyWords](https://github.com/hermitdave/FrequencyWords), OpenSubtitles 2018) | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/): при распространении изменённых словарей сохраняйте ту же лицензию и ссылку на источник |
+| Шрифт [Roboto](https://github.com/googlefonts/roboto) в `src/fonts` | Apache License 2.0 |
+| Значки [Font Awesome Free](https://fontawesome.com/license/free) (шрифт, через LVGL) | SIL OFL 1.1 |
+| [LVGL](https://github.com/lvgl/lvgl) | MIT |
+| [Arduino_GFX](https://github.com/moononournation/Arduino_GFX) | BSD |
+| [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) | Apache License 2.0 |
+| [Arduino-ESP32](https://github.com/espressif/arduino-esp32) | LGPL 2.1 |
+
+Распознавание свайпа написано по мотивам алгоритма SHARK2 (Kristensson, Zhai) и классификатора [FlorisBoard](https://github.com/florisboard/florisboard); их код не копировался.
