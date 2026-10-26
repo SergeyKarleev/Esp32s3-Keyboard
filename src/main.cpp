@@ -31,6 +31,8 @@ static void handleSerial() {
                 display::touchUp();
             else if (line[0] == 'I')
                 touch::dumpState();
+            else if (line[0] == 'O')
+                hid::dumpUsbRequests();
             len = 0;
         } else if (len < sizeof line - 1) {
             line[len++] = c;

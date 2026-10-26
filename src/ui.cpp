@@ -25,7 +25,6 @@ lv_obj_t* tabKeyboard = nullptr;
 lv_obj_t* tabTrackpad = nullptr;
 lv_obj_t* pageKeyboard = nullptr;
 lv_obj_t* pageTrackpad = nullptr;
-lv_obj_t* langLabel = nullptr;
 lv_obj_t* usbLabel = nullptr;
 lv_obj_t* bleLabel = nullptr;
 lv_obj_t* settingsPanel = nullptr;
@@ -159,7 +158,6 @@ void updateStatus(lv_timer_t* = nullptr) {
     hid::TargetKind target = hid::targetKind();
     lv_obj_set_style_text_color(usbLabel,
                                 hid::usbConnected() && target != hid::TargetKind::Ble ? theme::ok() : theme::muted(), 0);
-    lv_label_set_text(langLabel, settings::get().lang == settings::RU ? "RU" : "EN");
     if (target == hid::TargetKind::Usb) {
         lv_obj_set_style_text_color(bleLabel, theme::muted(), 0);
         return;
@@ -190,7 +188,7 @@ const QuickAction QUICK[] = {
 
 void onQuick(lv_event_t* e) {
     auto i = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
-    hid::chord(settings::get().macHost ? hid::MOD_GUI : hid::MOD_CTRL, QUICK[i].code);
+    hid::chord(settings::isMac() ? hid::MOD_GUI : hid::MOD_CTRL, QUICK[i].code);
 }
 
 void onSuggestion(lv_event_t* e) { keyboard::pickSuggestion(reinterpret_cast<uintptr_t>(lv_event_get_user_data(e))); }
@@ -337,15 +335,23 @@ void createSettings() {
         },
         LV_EVENT_VALUE_CHANGED, nullptr);
 
-    row = settingsRow(settingsPanel, "Mac: Cmd и русская раскладка Mac");
+    row = settingsRow(settingsPanel, "Автоисправление");
     sw = lv_switch_create(row);
-    if (settings::get().macHost) lv_obj_add_state(sw, LV_STATE_CHECKED);
+    if (settings::get().autocorrect) lv_obj_add_state(sw, LV_STATE_CHECKED);
     lv_obj_add_event_cb(
-        sw,
-        [](lv_event_t* e) {
-            settings::get().macHost = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-            keyboard::refresh();
-        },
+        sw, [](lv_event_t* e) { settings::get().autocorrect = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED); },
+        LV_EVENT_VALUE_CHANGED, nullptr);
+
+    // Mac: копировать/вставить через Cmd, знаки по русской раскладке macOS
+    row = settingsRow(settingsPanel, "Система получателя");
+    dd = lv_dropdown_create(row);
+    lv_dropdown_set_options_static(dd, settings::hostOsOptions());
+    lv_dropdown_set_selected(dd, settings::get().hostOs);
+    lv_obj_set_width(dd, 200);
+    lv_obj_set_style_text_font(dd, theme::small(), 0);
+    lv_obj_set_style_text_font(lv_dropdown_get_list(dd), theme::medium(), 0);
+    lv_obj_add_event_cb(
+        dd, [](lv_event_t* e) { settings::get().hostOs = lv_dropdown_get_selected(lv_event_get_target(e)); },
         LV_EVENT_VALUE_CHANGED, nullptr);
 
     row = settingsRow(settingsPanel, "Bluetooth");
@@ -430,8 +436,6 @@ void create() {
     lv_obj_set_style_text_color(promptLabel, theme::accent(), 0);
     keyboard::onPrompt(showPrompt);
 
-    langLabel = makeBarLabel(bar, "EN");
-    lv_obj_set_style_text_color(langLabel, theme::text(), 0);
     usbLabel = makeBarLabel(bar, LV_SYMBOL_USB);
     bleLabel = makeBarLabel(bar, LV_SYMBOL_BLUETOOTH);
     // тап по значку BT — включить/выключить Bluetooth

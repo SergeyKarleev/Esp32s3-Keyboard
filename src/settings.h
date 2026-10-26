@@ -16,8 +16,10 @@ struct Values {
     bool naturalScroll = true;
     Lang lang = EN;
     bool bluetooth = true;
-    // получатель — Mac: копировать/вставить через Cmd, русская раскладка macOS
-    bool macHost = false;
+    // система получателя: 0 — определять самой, 1 — Mac (Cmd, русская раскладка macOS), 2 — Windows/Android
+    uint8_t hostOs = 0;
+    // исправлять опечатки в словах, набранных по буквам
+    bool autocorrect = true;
     // свайп ищет слова сразу в английском и русском, раскладка переключается сама
     bool bilingual = true;
     // куда отправлять нажатия: hid::TargetKind и адрес Bluetooth-хоста
@@ -28,6 +30,10 @@ struct Values {
 void load();
 void save();
 Values& get();
+
+// получатель — Mac (по настройке или определен автоматически)
+bool isMac();
+const char* hostOsOptions();
 
 // варианты для lv_dropdown, через \n
 const char* hotkeyOptions();

@@ -50,6 +50,19 @@ void usbSend(uint8_t id, const void* data, size_t len) {
     usbHid.SendReport(id, data, len, USB_TIMEOUT_MS);
 }
 
+// Определение ОС хоста по USB: macOS сначала запрашивает у строки дескриптора 2 байта (длину),
+// затем всю; Linux/Android и Windows сразу просят 255 байт — один вызов на строку.
+// Колбэк перехвачен через -Wl,--wrap: TinyUSB зовет его на каждый запрос строки.
+constexpr size_t MAX_STRING_REQS = 32;
+struct StringReq {
+    uint32_t at;
+    uint8_t index;
+    uint16_t langid;
+};
+StringReq stringReqs[MAX_STRING_REQS];
+volatile size_t stringReqCount = 0;
+size_t stringReqPrinted = 0;
+
 // ---------- BLE ----------
 
 constexpr uint8_t BLE_ID_KEYBOARD = 1;
@@ -93,6 +106,7 @@ struct Peer {
     char name[32] = "";
     bool nameAsked = false;
     bool encrypted = false;
+    bool apple = false;
 };
 Peer peers[MAX_PEERS];
 portMUX_TYPE peersLock = portMUX_INITIALIZER_UNLOCKED;
@@ -151,19 +165,30 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     }
 };
 
+std::string readString(NimBLEClient* client, uint16_t service, uint16_t characteristic) {
+    NimBLERemoteService* svc = client->getService(NimBLEUUID(service));
+    NimBLERemoteCharacteristic* chr = svc ? svc->getCharacteristic(NimBLEUUID(characteristic)) : nullptr;
+    return chr && chr->canRead() ? std::string(chr->readValue()) : std::string();
+}
+
+// имя хоста (Generic Access) и производитель (Device Information): Mac и iPhone отвечают «Apple Inc.»
 void readNameTask(void* arg) {
     uint16_t handle = uint16_t(uintptr_t(arg));
-    std::string name;
+    std::string name, maker;
     NimBLEClient* client = server ? server->getClient(handle) : nullptr;
     if (client) {
-        NimBLERemoteService* svc = client->getService(NimBLEUUID(uint16_t(0x1800)));
-        NimBLERemoteCharacteristic* chr = svc ? svc->getCharacteristic(NimBLEUUID(uint16_t(0x2A00))) : nullptr;
-        if (chr && chr->canRead()) name = chr->readValue();
+        name = readString(client, 0x1800, 0x2A00);
+        maker = readString(client, 0x180A, 0x2A29);
     }
-    Serial.printf("[ble] peer %u name '%s'\n", handle, name.c_str());
+    bool apple = maker.find("Apple") != std::string::npos || name.find("Mac") != std::string::npos ||
+                 name.find("iPhone") != std::string::npos || name.find("iPad") != std::string::npos;
+    Serial.printf("[ble] peer %u name '%s' maker '%s'\n", handle, name.c_str(), maker.c_str());
     taskENTER_CRITICAL(&peersLock);
-    for (Peer& p : peers)
-        if (p.used && p.handle == handle && !name.empty()) strlcpy(p.name, name.c_str(), sizeof p.name);
+    for (Peer& p : peers) {
+        if (!p.used || p.handle != handle) continue;
+        if (!name.empty()) strlcpy(p.name, name.c_str(), sizeof p.name);
+        p.apple = apple;
+    }
     taskEXIT_CRITICAL(&peersLock);
     version++;
     vTaskDelete(nullptr);
@@ -274,6 +299,11 @@ void begin(const char* name, bool bluetooth) {
 }
 
 void poll() {
+    // запросы идут при подключении, когда монитор порта еще не открыт: печатаем, как только откроют
+    while (Serial && stringReqPrinted < std::min<size_t>(size_t(stringReqCount), MAX_STRING_REQS)) {
+        const StringReq& r = stringReqs[stringReqPrinted++];
+        Serial.printf("[usb] string %u lang 0x%04X at %u\n", r.index, r.langid, r.at);
+    }
     // имя нового хоста: чтение GATT блокирует, поэтому в отдельной задаче
     for (Peer& p : peers) {
         if (!p.used || !p.encrypted || p.nameAsked) continue;
@@ -392,6 +422,46 @@ size_t devices(Device* out, size_t maxOut) {
 
 uint32_t devicesVersion() { return version; }
 
+namespace {
+
+// macOS запрашивает каждую строку дважды (сначала длину); другие системы — по разу
+bool usbIsMac() {
+    size_t n = std::min<size_t>(size_t(stringReqCount), MAX_STRING_REQS);
+    for (size_t i = 0; i < n; i++)
+        for (size_t j = i + 1; j < n; j++)
+            if (stringReqs[i].index && stringReqs[i].index == stringReqs[j].index &&
+                stringReqs[i].langid == stringReqs[j].langid)
+                return true;
+    return false;
+}
+
+bool blePeerIsMac(const char* addr) {
+    bool apple = false;
+    taskENTER_CRITICAL(&peersLock);
+    for (const Peer& p : peers)
+        if (p.used && (!addr || !strcmp(p.addr, addr))) apple |= p.apple;
+    taskEXIT_CRITICAL(&peersLock);
+    return apple;
+}
+
+}  // namespace
+
+void dumpUsbRequests() {
+    size_t n = std::min<size_t>(size_t(stringReqCount), MAX_STRING_REQS);
+    Serial.printf("[usb] %u string requests, mac %d\n", n, usbIsMac());
+    for (size_t i = 0; i < n; i++)
+        Serial.printf("[usb] string %u lang 0x%04X at %u\n", stringReqs[i].index, stringReqs[i].langid, stringReqs[i].at);
+}
+
+bool hostIsMac() {
+    switch (targetKind_) {
+        case TargetKind::Usb: return usbIsMac();
+        case TargetKind::Ble: return blePeerIsMac(targetAddr_);
+        // везде: решает USB-хост, без него — любой Bluetooth-хост от Apple
+        default: return usbMounted ? usbIsMac() : blePeerIsMac(nullptr);
+    }
+}
+
 bool usbConnected() { return usbMounted; }
 
 BleState bleState() {
@@ -418,3 +488,15 @@ void forgetBonds() {
 }
 
 }  // namespace hid
+
+extern "C" uint16_t const* __real_tud_descriptor_string_cb(uint8_t index, uint16_t langid);
+
+extern "C" uint16_t const* __wrap_tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
+    using namespace hid;
+    size_t n = stringReqCount;
+    if (n < MAX_STRING_REQS) {
+        stringReqs[n] = {millis(), index, langid};
+        stringReqCount = n + 1;
+    }
+    return __real_tud_descriptor_string_cb(index, langid);
+}

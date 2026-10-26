@@ -26,12 +26,19 @@ struct Word {
     float score;       // меньше — лучше; сравним между языками
 };
 
+// места, где палец задержался на клавише; exact — задержки на всех буквах, от первой до последней
+struct Dwell {
+    const Point* points = nullptr;
+    size_t n = 0;
+    bool exact = false;
+};
+
 // построить индексы словарей (PSRAM); вызвать один раз при старте
 void begin();
 
 // до maxOut кандидатов, лучший первым; keyW — ширина буквенной клавиши
-size_t decode(settings::Lang lang, const Point* path, size_t n, const LetterKey* keys, size_t keyCount, int keyW,
-              Word* out, size_t maxOut);
+size_t decode(settings::Lang lang, const Point* path, size_t n, const Dwell& dwell, const LetterKey* keys, size_t keyCount,
+              int keyW, Word* out, size_t maxOut);
 
 // запомнить слово пользователя (UTF-8, нижний регистр): чем больше weight, тем выше оно в подсказках
 void learn(settings::Lang lang, const char* word, size_t len, uint8_t weight);
@@ -45,6 +52,13 @@ void forget();
 bool addSample(settings::Lang lang, const Point* path, size_t n, const LetterKey* keys, size_t keyCount, int keyW,
                const char* word, size_t len);
 void resetCalibration();
+
+// слово есть в словаре или выучено
+bool known(settings::Lang lang, const char* word, size_t len);
+// слова, начинающиеся с prefix (UTF-8, нижний регистр): сначала выученные, потом по частоте
+size_t complete(settings::Lang lang, const char* prefix, size_t len, Word* out, size_t maxOut);
+// исправление опечатки: частое слово на одну правку от word; false — слово известно или замены нет
+bool correct(settings::Lang lang, const char* word, size_t len, Word& out);
 
 // следующий символ UTF-8 (codepoint), p сдвигается
 uint32_t nextCp(const char*& p, const char* end);

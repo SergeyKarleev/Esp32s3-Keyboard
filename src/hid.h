@@ -68,6 +68,10 @@ const char* targetAddr();
 size_t devices(Device* out, size_t maxOut);
 // меняется при подключении, отключении и получении имени устройства
 uint32_t devicesVersion();
+// выбранный получатель (или основной при выводе «везде») — Apple
+bool hostIsMac();
+// отладка: запросы строк USB-дескрипторов при подключении
+void dumpUsbRequests();
 
 bool usbConnected();
 BleState bleState();

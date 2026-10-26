@@ -36,22 +36,13 @@ const Glyph GLYPHS[] = {
     {0x1D, "z", "Z", "я", "Я"}, {0x1B, "x", "X", "ч", "Ч"}, {0x06, "c", "C", "с", "С"},
     {0x19, "v", "V", "м", "М"}, {0x05, "b", "B", "и", "И"}, {0x11, "n", "N", "т", "Т"},
     {0x10, "m", "M", "ь", "Ь"}, {0x36, ",", "<", "б", "Б"}, {0x37, ".", ">", "ю", "Ю"},
-    {0x38, "/", "?", ".", ","},
+    {0x38, "/", "?", "?", "!"},
     {0x35, "`", "~", "ё", "Ё"}, {0x1E, "1", "!", "1", "!"}, {0x1F, "2", "@", "2", "\""},
     {0x20, "3", "#", "3", "No"}, {0x21, "4", "$", "4", ";"}, {0x22, "5", "%", "5", "%"},
     {0x23, "6", "^", "6", ":"}, {0x24, "7", "&", "7", "?"}, {0x25, "8", "*", "8", "*"},
     {0x26, "9", "(", "9", "("}, {0x27, "0", ")", "0", ")"}, {0x2D, "-", "_", "-", "_"},
     {0x2E, "=", "+", "=", "+"}, {0x31, "\\", "|", "\\", "/"},
 };
-
-// русская раскладка macOS отличается от ПК цифровым рядом с Shift; точка и запятая там на Shift+7 и Shift+6
-struct MacShift {
-    uint8_t code;
-    const char* ru;
-};
-const MacShift MAC_RU_SHIFT[] = {{0x21, "%"}, {0x22, ":"}, {0x23, ","}, {0x24, "."}, {0x25, ";"}};
-
-bool macRu() { return settings::get().macHost && settings::get().lang == settings::RU; }
 
 const Glyph* findGlyph(uint8_t code) {
     for (const Glyph& g : GLYPHS)
@@ -159,7 +150,12 @@ constexpr size_t MAX_PATH = 400;
 constexpr size_t MAX_TRAIL = 64;
 constexpr size_t MAX_SUGGEST = 4;
 swipe::Point path[MAX_PATH];
+uint32_t pathTime[MAX_PATH];
 size_t pathLen = 0;
+uint32_t releasedAt = 0;
+// палец простоял на месте (в радиусе DWELL_PX) не меньше DWELL_MS — задержка на букве
+constexpr uint32_t DWELL_MS = 250;
+constexpr int DWELL_PX = 12;
 bool pathFromLetter = false;
 bool swiping = false;
 // за это нажатие сработал автоповтор: отпускание клавишу не нажимает
@@ -184,6 +180,14 @@ SuggestCallback suggestCb = nullptr;
 // слово, набираемое по буквам: запоминается после пробела или Enter
 char typed[32];
 size_t typedLen = 0;
+
+// чем заканчивается набранный текст: перед свайп-словом нужен ли пробел, перед знаком — лишний ли
+enum class Tail : uint8_t { Space, Word, Punct, Other, SwipeSpace };
+Tail tail = Tail::Space;
+// подсказки: варианты свайпа, дополнения набираемого слова или откат автоисправления
+enum class Source : uint8_t { Swipe, Completion, Correction };
+Source source = Source::Swipe;
+bool typedCapital = false;
 
 // последний свайп: образец для калибровки, если слово исправят
 swipe::Point lastPath[MAX_PATH];
@@ -217,12 +221,7 @@ const char* labelFor(const Btn& b) {
     const Glyph* g = findGlyph(b.code);
     if (!g) return "?";
     bool s = shifted(b.code);
-    if (settings::get().lang == settings::RU) {
-        if (s && macRu())
-            for (const MacShift& m : MAC_RU_SHIFT)
-                if (m.code == b.code) return m.ru;
-        return s ? g->ruShift : g->ru;
-    }
+    if (settings::get().lang == settings::RU) return s ? g->ruShift : g->ru;
     return s ? g->enShift : g->en;
 }
 
@@ -289,6 +288,7 @@ const char* letterText(uint8_t code) {
 }
 
 size_t letterKeys(settings::Lang lang, swipe::LetterKey* out, size_t maxOut, int& keyW);
+size_t typeText(settings::Lang lang, const char* text, size_t len, bool capital, bool allCaps);
 
 void sampleLastSwipe(settings::Lang lang, const char* word, size_t len) {
     swipe::LetterKey keys[40];
@@ -302,6 +302,7 @@ void trackTyped(uint8_t code, uint8_t mods) {
     if (letter && typedLen + strlen(letter) < sizeof typed) {
         // дописывают к свайпнутому слову, не стерев его — это не исправление
         if (fix == Fix::AfterSwipe) fix = Fix::None;
+        if (!typedLen) typedCapital = mods & hid::MOD_SHIFT;
         memcpy(typed + typedLen, letter, strlen(letter));
         typedLen += strlen(letter);
         return;
@@ -323,19 +324,6 @@ void trackTyped(uint8_t code, uint8_t mods) {
     }
     fix = Fix::None;
     typedLen = 0;
-}
-
-// точка и запятая в любом языке: в русской раскладке ПК они на «/» и Shift+«/»,
-// в русской раскладке Mac — на Shift+7 и Shift+6
-void typePunct(bool period) {
-    clearSuggestions();
-    trackTyped(0x36, 0);
-    if (settings::get().lang == settings::EN)
-        hid::tapKey(0, period ? 0x37 : 0x36);
-    else if (settings::get().macHost)
-        hid::tapKey(hid::MOD_SHIFT, period ? 0x24 : 0x23);
-    else
-        hid::tapKey(period ? 0 : hid::MOD_SHIFT, 0x38);
 }
 
 // клавиша, дающая символ в раскладке получателя
@@ -372,48 +360,140 @@ const Stroke* findStroke(const Stroke (&table)[N], char c) {
     return nullptr;
 }
 
-// символ слоя цифр; в русской раскладке нет @#$[]{}<> и др. — на время символа переключаем получателя на EN
-void typeChar(uint16_t c) {
+// знаки, после которых свайп-слово отделяется пробелом и перед которыми пробел свайпа убирается
+bool isSentencePunct(char c) { return c == '.' || c == ',' || c == '!' || c == '?' || c == ':' || c == ';'; }
+
+// символ в раскладке получателя; в русской нет @#$[]{}<> и др. — на время символа переключаем получателя на EN
+void sendChar(char c, uint8_t mods) {
+    if (c >= '0' && c <= '9') {
+        hid::tapKey(mods, c == '0' ? 0x27 : 0x1E + (c - '1'));
+        return;
+    }
+    const Stroke* st = nullptr;
+    if (settings::get().lang == settings::EN)
+        st = findStroke(STROKES_EN, c);
+    else
+        st = settings::isMac() ? findStroke(STROKES_RU_MAC, c) : findStroke(STROKES_RU_PC, c);
+    if (st) {
+        hid::tapKey(mods | (st->shift ? hid::MOD_SHIFT : 0), st->code);
+        return;
+    }
+    if (!(st = findStroke(STROKES_EN, c))) return;
+    settings::sendHotkey();
+    delay(LANG_SWITCH_MS);
+    hid::tapKey(mods | (st->shift ? hid::MOD_SHIFT : 0), st->code);
+    settings::sendHotkey();
+    delay(LANG_SWITCH_MS);
+}
+
+void typeChar(char c) {
     clearSuggestions();
     trackTyped(0x36, 0);
     uint8_t mods = sticky;
     sticky = 0;
-    if (c >= '0' && c <= '9') {
-        hid::tapKey(mods, c == '0' ? 0x27 : 0x1E + (c - '1'));
-    } else if (settings::get().lang == settings::EN) {
-        const Stroke* st = findStroke(STROKES_EN, char(c));
-        if (st) hid::tapKey(mods | (st->shift ? hid::MOD_SHIFT : 0), st->code);
+    bool punct = isSentencePunct(c) && !mods;
+    // «слово ,» после свайпа -> «слово, »
+    if (punct && tail == Tail::SwipeSpace) hid::tapKey(0, HK_BACKSPACE);
+    sendChar(c, mods);
+    if (punct && tail == Tail::SwipeSpace) {
+        hid::tapKey(0, HK_SPACE);
     } else {
-        const Stroke* st = settings::get().macHost ? findStroke(STROKES_RU_MAC, char(c)) : findStroke(STROKES_RU_PC, char(c));
-        if (st) {
-            hid::tapKey(mods | (st->shift ? hid::MOD_SHIFT : 0), st->code);
-        } else if ((st = findStroke(STROKES_EN, char(c)))) {
-            settings::sendHotkey();
-            delay(LANG_SWITCH_MS);
-            hid::tapKey(mods | (st->shift ? hid::MOD_SHIFT : 0), st->code);
-            settings::sendHotkey();
-            delay(LANG_SWITCH_MS);
-        }
+        tail = punct ? Tail::Punct : (c >= '0' && c <= '9') ? Tail::Word : Tail::Other;
     }
-    if (mods) build();
+    if (shift == ShiftState::Once) shift = ShiftState::Off;
+    build();
+}
+
+// число символов UTF-8 строки
+size_t cpCount(const char* s, size_t len) {
+    size_t n = 0;
+    for (size_t i = 0; i < len; i++) n += (s[i] & 0xC0) != 0x80;
+    return n;
+}
+
+void setSuggestions(Source src, const char* const* words, size_t n, settings::Lang lang) {
+    for (size_t i = 0; i < n && i < MAX_SUGGEST; i++) {
+        strlcpy(suggest[i], words[i], sizeof suggest[i]);
+        suggestPtrs[i] = suggest[i];
+        suggestLang[i] = lang;
+    }
+    suggestCount = std::min(n, MAX_SUGGEST);
+    source = src;
+    notifySuggestions();
+}
+
+// дополнения набираемого слова: [0] — уже набранное начало, дальше варианты
+void showCompletions() {
+    if (typedLen < 1) return;
+    settings::Lang lang = settings::get().lang;
+    swipe::Word found[MAX_SUGGEST - 1];
+    size_t n = swipe::complete(lang, typed, typedLen, found, MAX_SUGGEST - 1);
+    if (!n) return;
+    char words[MAX_SUGGEST][64];
+    const char* ptrs[MAX_SUGGEST];
+    strlcpy(words[0], typed, std::min(sizeof words[0], typedLen + 1));
+    ptrs[0] = words[0];
+    for (size_t i = 0; i < n; i++) {
+        strlcpy(words[i + 1], found[i].text, std::min<size_t>(sizeof words[i + 1], found[i].len + 1));
+        ptrs[i + 1] = words[i + 1];
+    }
+    setSuggestions(Source::Completion, ptrs, n + 1, lang);
+    lastTypedChars = cpCount(typed, typedLen);
+    lastCapital = typedCapital;
+    lastAllCaps = false;
+}
+
+// пробел после слова, набранного по буквам: опечатку заменяем частым словом, исходное — в подсказке для отката
+bool autocorrect() {
+    if (!settings::get().autocorrect || !typedLen || tail != Tail::Word) return false;
+    settings::Lang lang = settings::get().lang;
+    swipe::Word repl;
+    if (!swipe::correct(lang, typed, typedLen, repl)) return false;
+    char corrected[64], original[64];
+    strlcpy(corrected, repl.text, std::min<size_t>(sizeof corrected, repl.len + 1));
+    strlcpy(original, typed, std::min(sizeof original, typedLen + 1));
+    Serial.printf("[kbd] autocorrect %s -> %s\n", original, corrected);
+    for (size_t k = cpCount(typed, typedLen); k > 0; k--) hid::tapKey(0, HK_BACKSPACE);
+    typeText(lang, corrected, strlen(corrected), typedCapital, false);
+    hid::tapKey(0, HK_SPACE);
+    const char* ptrs[] = {corrected, original};
+    setSuggestions(Source::Correction, ptrs, 2, lang);
+    lastTypedChars = cpCount(corrected, strlen(corrected)) + 1;
+    lastCapital = typedCapital;
+    lastAllCaps = false;
+    swipe::learn(lang, corrected, strlen(corrected), 1);
+    typedLen = 0;
+    fix = Fix::None;
+    tail = Tail::SwipeSpace;
+    return true;
 }
 
 void pressKey(uint8_t code) {
     clearSuggestions();
     uint8_t mods = sticky;
     if (shifted(code)) mods |= hid::MOD_SHIFT;
-    trackTyped(code, mods);
-    if (macRu() && !(mods & ~hid::MOD_SHIFT)) {
-        bool sh = mods & hid::MOD_SHIFT;
-        // точка/запятая с клавиши «/» и Shift+цифры подписаны по ПК: отправляем то, что на Mac дает эти символы
-        if (code == 0x38 && !sh) {
-            code = 0x24;
-            mods |= hid::MOD_SHIFT;
-        } else if (code == 0x38) {
-            code = 0x23;
-        }
+    bool plain = !(mods & ~hid::MOD_SHIFT);
+    // в русской раскладке на месте «/» — вопрос и восклицательный знак
+    if (code == 0x38 && plain && settings::get().lang == settings::RU) {
+        typeChar(mods ? '!' : '?');
+        return;
     }
+    if (code == HK_SPACE && plain && autocorrect()) {
+        if (shift == ShiftState::Once) shift = ShiftState::Off;
+        build();
+        return;
+    }
+    trackTyped(code, mods);
     hid::tapKey(mods, code);
+    if (letterText(code) && plain)
+        tail = Tail::Word;
+    else if (code == HK_SPACE || code == HK_ENTER || code == HK_TAB)
+        tail = Tail::Space;
+    else if (code == HK_BACKSPACE)
+        tail = typedLen ? Tail::Word : Tail::Other;
+    else
+        tail = Tail::Other;
+    if (tail == Tail::Word && plain) showCompletions();
     bool rebuild = sticky != 0 || shift == ShiftState::Once;
     sticky = 0;
     if (shift == ShiftState::Once) shift = ShiftState::Off;
@@ -530,6 +610,26 @@ void trainSwipe() {
     showTrainWord(LV_SYMBOL_OK " Теперь: ");
 }
 
+// места задержек: подряд идущие точки в радиусе DWELL_PX, на которых палец пробыл DWELL_MS
+swipe::Dwell findDwells(swipe::Point* out, size_t maxOut) {
+    swipe::Dwell dw;
+    dw.points = out;
+    bool atStart = false, atEnd = false;
+    for (size_t i = 0; i < pathLen && dw.n < maxOut;) {
+        size_t j = i + 1;
+        while (j < pathLen && std::abs(path[j].x - path[i].x) + std::abs(path[j].y - path[i].y) <= DWELL_PX) j++;
+        uint32_t until = j < pathLen ? pathTime[j] : releasedAt;
+        if (until - pathTime[i] >= DWELL_MS) {
+            out[dw.n++] = path[(i + j - 1) / 2];
+            atStart |= i == 0;
+            atEnd |= j == pathLen;
+        }
+        i = j;
+    }
+    dw.exact = atStart && atEnd;
+    return dw;
+}
+
 void finishSwipe() {
     if (trainIdx >= 0) {
         trainSwipe();
@@ -539,6 +639,8 @@ void finishSwipe() {
     lastPathLen = pathLen;
     settings::Lang cur = settings::get().lang;
     settings::Lang other = cur == settings::RU ? settings::EN : settings::RU;
+    swipe::Point dwellPts[24];
+    swipe::Dwell dwell = findDwells(dwellPts, 24);
     swipe::Word words[2 * MAX_SUGGEST];
     settings::Lang langs[2 * MAX_SUGGEST];
     uint32_t t = millis();
@@ -548,7 +650,7 @@ void finishSwipe() {
         swipe::LetterKey keys[40];
         int keyW;
         size_t keyCount = letterKeys(lang, keys, 40, keyW);
-        size_t got = swipe::decode(lang, path, pathLen, keys, keyCount, keyW, words + n, MAX_SUGGEST);
+        size_t got = swipe::decode(lang, path, pathLen, dwell, keys, keyCount, keyW, words + n, MAX_SUGGEST);
         for (size_t k = n; k < n + got; k++) {
             langs[k] = lang;
             // другой язык — только если заметно лучше: раскладка не переключается от случайных совпадений
@@ -561,7 +663,8 @@ void finishSwipe() {
     for (size_t k = 0; k < n; k++) order[k] = k;
     std::sort(order, order + n, [&](size_t a, size_t b) { return words[a].score < words[b].score; });
     n = std::min(n, MAX_SUGGEST);
-    Serial.printf("[swipe] %u points -> %u words in %u ms\n", pathLen, n, millis() - t);
+    Serial.printf("[swipe] %u points, %u dwells%s -> %u words in %u ms: %.*s\n", pathLen, dwell.n, dwell.exact ? " exact" : "",
+                  n, millis() - t, n ? int(words[order[0]].len) : 0, n ? words[order[0]].text : "");
     if (!n) return;
     for (size_t i = 0; i < n; i++) {
         const swipe::Word& w = words[order[i]];
@@ -572,11 +675,16 @@ void finishSwipe() {
         suggestLang[i] = langs[order[i]];
     }
     suggestCount = n;
-    typedLen = 0;
+    source = Source::Swipe;
     swipe::learn(suggestLang[0], suggest[0], strlen(suggest[0]), 1);
     lastCapital = shift != ShiftState::Off;
     lastAllCaps = shift == ShiftState::Locked;
+    // свайп сразу после слова или знака — отделяем пробелом
+    if (tail == Tail::Word || tail == Tail::Punct) hid::tapKey(0, HK_SPACE);
+    // набранное по буквам начало слова заменено свайпом: в словарь его не учим
+    typedLen = 0;
     typeWord(0);
+    tail = Tail::SwipeSpace;
     fix = Fix::AfterSwipe;
     sticky = 0;
     if (shift == ShiftState::Once) {
@@ -610,12 +718,14 @@ void trackPath(lv_event_code_t code) {
         pathLen = 0;
         swiping = false;
         repeated = false;
+        pathTime[pathLen] = millis();
         path[pathLen++] = {int16_t(p.x), int16_t(p.y)};
         return;
     }
     if (!pathFromLetter || pathLen == MAX_PATH) return;
     const swipe::Point& last = path[pathLen - 1];
     if (std::abs(p.x - last.x) + std::abs(p.y - last.y) < 3) return;
+    pathTime[pathLen] = millis();
     path[pathLen++] = {int16_t(p.x), int16_t(p.y)};
     // палец ушел с клавиши дальше ~0.7 ее ширины — это свайп
     if (!swiping && std::abs(p.x - path[0].x) + std::abs(p.y - path[0].y) > 28) {
@@ -637,9 +747,12 @@ void onEvent(lv_event_t* e) {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_PRESSED || code == LV_EVENT_PRESSING) {
         trackPath(code);
+        if (code == LV_EVENT_PRESSED) Serial.printf("[kbd] down %d,%d\n", path[0].x, path[0].y);
         return;
     }
     if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        releasedAt = millis();
+        Serial.printf("[kbd] %s, path %u, swiping %d\n", code == LV_EVENT_RELEASED ? "up" : "lost", pathLen, swiping);
         lv_obj_add_flag(trail, LV_OBJ_FLAG_HIDDEN);
         if (swiping) {
             swiping = false;
@@ -661,6 +774,7 @@ void onEvent(lv_event_t* e) {
         return;
     }
     if (code != LV_EVENT_VALUE_CHANGED) return;
+    Serial.printf("[kbd] key %u act %d code 0x%X\n", id, int(b.act), b.code);
 
     // VALUE_CHANGED при нажатом пальце — автоповтор; после повторов отпускание не нажимает еще раз
     if (lv_indev_get_act()->proc.state == LV_INDEV_STATE_PRESSED)
@@ -675,15 +789,15 @@ void onEvent(lv_event_t* e) {
         case Act::Alt: toggleSticky(hid::MOD_ALT); build(); break;
         case Act::Gui: toggleSticky(hid::MOD_GUI); build(); break;
         case Act::Media: hid::consumer(b.code); break;
-        case Act::Comma: typePunct(false); break;
-        case Act::Period: typePunct(true); break;
+        case Act::Comma: typeChar(','); break;
+        case Act::Period: typeChar('.'); break;
         case Act::Lang:
             if (langLongPress)
                 langLongPress = false;
             else
                 switchLang(true);
             break;
-        case Act::Char: typeChar(b.code); break;
+        case Act::Char: typeChar(char(b.code)); break;
         case Act::Num: layer = LAYER_NUM; build(); break;
         case Act::Fn: layer = LAYER_FN; build(); break;
         case Act::Abc: layer = LAYER_ALPHA; build(); break;
@@ -795,10 +909,12 @@ void pickSuggestion(size_t i) {
     std::swap(suggestPtrs[0], suggestPtrs[i]);
     std::swap(suggestLang[0], suggestLang[i]);
     // выбранный вариант важнее автоматически набранного; свайп — образец для калибровки
-    swipe::learn(suggestLang[0], suggestPtrs[0], strlen(suggestPtrs[0]), 3);
-    sampleLastSwipe(suggestLang[0], suggestPtrs[0], strlen(suggestPtrs[0]));
+    swipe::learn(suggestLang[0], suggestPtrs[0], strlen(suggestPtrs[0]), source == Source::Completion ? 2 : 3);
+    if (source == Source::Swipe) sampleLastSwipe(suggestLang[0], suggestPtrs[0], strlen(suggestPtrs[0]));
     typeWord(0);
-    fix = Fix::AfterSwipe;
+    typedLen = 0;
+    tail = Tail::SwipeSpace;
+    fix = source == Source::Swipe ? Fix::AfterSwipe : Fix::None;
     notifySuggestions();
 }
 

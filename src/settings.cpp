@@ -37,12 +37,15 @@ void load() {
     values.naturalScroll = prefs.getBool("natural", values.naturalScroll);
     values.lang = Lang(prefs.getUChar("lang", values.lang));
     values.bluetooth = prefs.getBool("bt", values.bluetooth);
-    values.macHost = prefs.getBool("cmd", values.macHost);
+    // раньше был переключатель «Mac»: включенный переносим в выбор системы
+    values.hostOs = prefs.getUChar("os", prefs.getBool("cmd", false) ? 1 : 0);
+    values.autocorrect = prefs.getBool("ac", values.autocorrect);
     values.bilingual = prefs.getBool("bi", values.bilingual);
     values.target = prefs.getUChar("target", values.target);
     prefs.getString("taddr", values.targetAddr, sizeof values.targetAddr);
     prefs.end();
     if (values.target > 2) values.target = 0;
+    if (values.hostOs > 2) values.hostOs = 0;
     if (values.hotkey >= HOTKEY_COUNT) values.hotkey = 0;
     if (values.speed < 1 || values.speed > 10) values.speed = 5;
     if (values.lang > RU) values.lang = EN;
@@ -55,7 +58,8 @@ void save() {
     prefs.putBool("natural", values.naturalScroll);
     prefs.putUChar("lang", values.lang);
     prefs.putBool("bt", values.bluetooth);
-    prefs.putBool("cmd", values.macHost);
+    prefs.putUChar("os", values.hostOs);
+    prefs.putBool("ac", values.autocorrect);
     prefs.putBool("bi", values.bilingual);
     prefs.putUChar("target", values.target);
     prefs.putString("taddr", values.targetAddr);
@@ -63,6 +67,13 @@ void save() {
 }
 
 Values& get() { return values; }
+
+bool isMac() {
+    if (values.hostOs == 0) return hid::hostIsMac();
+    return values.hostOs == 1;
+}
+
+const char* hostOsOptions() { return "Определять самой\nMac\nWindows, Android"; }
 
 const char* hotkeyOptions() { return "Ctrl+Space (Android, TV)\nAlt+Shift (Windows)\nCtrl+Shift\nWin+Space\nCaps Lock\nНе отправлять"; }
 

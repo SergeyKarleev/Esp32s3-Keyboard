@@ -23,6 +23,17 @@ constexpr float FREQ_WEIGHT = 0.08f;
 constexpr float MISS_FREE = 0.3f;
 constexpr float MISS_MAX = 1.6f;
 constexpr float MISS_WEIGHT = 0.2f;
+// автоисправление: только слова не короче MIN_CORRECT_LEN, замена буквы — от MIN_SUBST_LEN,
+// исправляем только на достаточно частые слова
+constexpr int MIN_CORRECT_LEN = 3;
+constexpr int MIN_SUBST_LEN = 4;
+constexpr uint32_t MAX_CORRECT_RANK = 30000;
+// буква с задержкой пальца, которой нет в слове; слово не совпало с буквами задержек, когда задержки на всех буквах
+constexpr float DWELL_MISS_WEIGHT = 0.3f;
+constexpr float DWELL_EXACT_WEIGHT = 0.4f;
+constexpr int MIN_EXACT_DWELLS = 3;
+// вес канала формы (расстояние в долях рамки пути) рядом с каналом положения (в ширинах клавиши)
+constexpr float SHAPE_WEIGHT = 3.0f;
 
 struct Dict {
     const char* text = nullptr;
@@ -32,6 +43,9 @@ struct Dict {
     uint32_t* wordOff = nullptr;    // начало слова по рангу
     uint32_t* bucketStart = nullptr;  // CSR: [первая буква][последняя буква] -> диапазон в bucketWords
     uint32_t* bucketWords = nullptr;  // ранги слов
+    // CSR по первой букве (для дополнения и исправления слов)
+    uint32_t* firstStart = nullptr;
+    uint32_t* firstWords = nullptr;
 };
 
 Dict dicts[2];
@@ -129,10 +143,32 @@ void build(Dict& d, const char* text, uint32_t base, uint8_t letters) {
         if (edges(d, p, strchr(p, '\n'), f, l)) d.bucketWords[fill[f * letters + l]++] = w;
     }
     free(fill);
+
+    d.firstStart = static_cast<uint32_t*>(psram((letters + 1) * 4));
+    d.firstWords = static_cast<uint32_t*>(psram(d.words * 4));
+    std::fill(d.firstStart, d.firstStart + letters + 1, 0);
+    for (w = 0; w < d.words; w++) {
+        const char* p = text + d.wordOff[w];
+        int f, l;
+        if (edges(d, p, strchr(p, '\n'), f, l)) d.firstStart[f + 1]++;
+    }
+    for (size_t b = 0; b < letters; b++) d.firstStart[b + 1] += d.firstStart[b];
+    uint32_t* next = static_cast<uint32_t*>(psram((letters + 1) * 4));
+    std::copy(d.firstStart, d.firstStart + letters + 1, next);
+    for (w = 0; w < d.words; w++) {
+        const char* p = text + d.wordOff[w];
+        int f, l;
+        if (edges(d, p, strchr(p, '\n'), f, l)) d.firstWords[next[f]++] = w;
+    }
+    free(next);
     Serial.printf("[swipe] dict %u words, psram free %u\n", d.words, heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 }
 
-float dist(FPoint a, FPoint b) { return std::hypot(a.x - b.x, a.y - b.y); }
+// std::hypot на ESP32 считается программно и в разы медленнее sqrtf на FPU
+float dist(FPoint a, FPoint b) {
+    float dx = a.x - b.x, dy = a.y - b.y;
+    return sqrtf(dx * dx + dy * dy);
+}
 
 // равномерно по длине ломаной
 void resample(const FPoint* in, int n, FPoint* out, int m) {
@@ -162,6 +198,20 @@ void resample(const FPoint* in, int n, FPoint* out, int m) {
     while (k < m) out[k++] = in[n - 1];
 }
 
+// форма пути без положения и масштаба: центр рамки в 0, длинная сторона рамки = 1 (как в SHARK2/FlorisBoard)
+void normalizeShape(const FPoint* in, FPoint* out, int n) {
+    float minX = in[0].x, maxX = in[0].x, minY = in[0].y, maxY = in[0].y;
+    for (int i = 1; i < n; i++) {
+        minX = std::min(minX, in[i].x);
+        maxX = std::max(maxX, in[i].x);
+        minY = std::min(minY, in[i].y);
+        maxY = std::max(maxY, in[i].y);
+    }
+    float side = std::max(std::max(maxX - minX, maxY - minY), 1e-3f);
+    float cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    for (int i = 0; i < n; i++) out[i] = {(in[i].x - cx) / side, (in[i].y - cy) / side};
+}
+
 // ближайшие к точке клавиши в радиусе (до maxOut), по возрастанию расстояния
 int nearKeys(const FPoint& p, const FPoint* centers, const bool* has, int letters, float radius, int* out, int maxOut) {
     int idx[32], count = 0;
@@ -178,34 +228,68 @@ struct Match {
     const Dict* d = nullptr;
     FPoint centers[32];
     bool has[32] = {};
-    FPoint user[N], dense[64];
+    FPoint user[N], dense[64], userShape[N];
     float kw = 1;
     float missFree = MISS_FREE, missMax = MISS_MAX;
+    // расстояние от пути до каждой клавиши: считается один раз на свайп
+    float keyMiss[32];
+    // буквы, на которых палец задержался, по порядку; exact — задержки на всех буквах от первой до последней
+    int dwell[MAX_WORD_KEYS];
+    int dwellN = 0;
+    bool exact = false;
+
+    void prepare() {
+        normalizeShape(user, userShape, N);
+        for (int li = 0; li < 32; li++) {
+            if (!has[li]) continue;
+            float m = 1e9f;
+            for (int j = 0; j < 64; j++) {
+                float dx = centers[li].x - dense[j].x, dy = centers[li].y - dense[j].y;
+                m = std::min(m, dx * dx + dy * dy);
+            }
+            keyMiss[li] = std::sqrt(m);
+        }
+    }
 
     // расстояние пути до ломаной через буквы слова [p, e), в ширинах клавиши; false — не подходит
     bool score(const char* p, const char* e, float& out) const {
-        FPoint tmpl[MAX_WORD_KEYS], tmplN[N];
+        int idx[MAX_WORD_KEYS];
         int L = 0, prev = -1;
         while (p < e) {
             int li = letterIndex(*d, nextCp(p, e));
             if (li < 0 || !has[li]) return false;
             if (li == prev) continue;  // двойные буквы — одна клавиша
             if (L == MAX_WORD_KEYS) return false;
-            tmpl[L++] = centers[li];
+            idx[L++] = li;
             prev = li;
         }
         // путь должен пройти рядом с каждой буквой слова: далеко — отказ, чуть мимо — штраф
         float miss = 0;
         for (int i = 1; i < L - 1; i++) {
-            float m = 1e9f;
-            for (int j = 0; j < 64; j++) m = std::min(m, dist(tmpl[i], dense[j]));
+            float m = keyMiss[idx[i]];
             if (m >= kw * missMax) return false;
             miss += std::max(0.0f, m - kw * missFree);
         }
+        // задержки пальца — буквы, которые точно есть в слове
+        float dwellPenalty = 0;
+        if (dwellN) {
+            int k = 0;
+            for (int i = 0; i < L && k < dwellN; i++)
+                if (idx[i] == dwell[k]) k++;
+            dwellPenalty = DWELL_MISS_WEIGHT * (dwellN - k);
+            if (exact && (L != dwellN || k != dwellN)) dwellPenalty += DWELL_EXACT_WEIGHT;
+        }
+        FPoint tmpl[MAX_WORD_KEYS], tmplN[N];
+        for (int i = 0; i < L; i++) tmpl[i] = centers[idx[i]];
         resample(tmpl, L, tmplN, N);
         float sum = 0;
         for (int i = 0; i < N; i++) sum += dist(user[i], tmplN[i]);
-        out = sum / N / kw + MISS_WEIGHT * miss / kw;
+        // канал формы: рисунок пути без учета сдвига и размаха
+        FPoint shape[N];
+        normalizeShape(tmplN, shape, N);
+        float shapeSum = 0;
+        for (int i = 0; i < N; i++) shapeSum += dist(userShape[i], shape[i]);
+        out = sum / N / kw + SHAPE_WEIGHT * shapeSum / N + MISS_WEIGHT * miss / kw + dwellPenalty;
         return true;
     }
 };
@@ -317,8 +401,8 @@ void begin() {
     loadUserWords();
 }
 
-size_t decode(settings::Lang lang, const Point* path, size_t n, const LetterKey* keys, size_t keyCount, int keyW, Word* out,
-              size_t maxOut) {
+size_t decode(settings::Lang lang, const Point* path, size_t n, const Dwell& dwell, const LetterKey* keys, size_t keyCount,
+              int keyW, Word* out, size_t maxOut) {
     const Dict& d = dicts[lang];
     if (!d.words || n < 2) return 0;
 
@@ -344,9 +428,36 @@ size_t decode(settings::Lang lang, const Point* path, size_t n, const LetterKey*
     int starts[4], ends[4];
     int sn = nearKeys(m.user[0], m.centers, m.has, d.letters, m.kw * 1.3f * tol, starts, 4);
     int en = nearKeys(m.user[N - 1], m.centers, m.has, d.letters, m.kw * 1.3f * tol, ends, 4);
+    m.prepare();
+
+    // задержки -> ближайшие буквы, повтор подряд — одна буква
+    for (size_t i = 0; i < dwell.n && m.dwellN < MAX_WORD_KEYS; i++) {
+        FPoint p{dwell.points[i].x - calib.dx, dwell.points[i].y - calib.dy};
+        int li;
+        if (!nearKeys(p, m.centers, m.has, d.letters, m.kw * tol, &li, 1)) continue;
+        if (m.dwellN && m.dwell[m.dwellN - 1] == li) continue;
+        m.dwell[m.dwellN++] = li;
+    }
+    m.exact = dwell.exact && m.dwellN >= MIN_EXACT_DWELLS;
 
     Best best;
     best.max = std::min<size_t>(maxOut, 8);
+    // задержался на каждой букве — слово набирается ровно по ним, даже если его нет в словаре
+    static char literal[2][MAX_WORD_KEYS * 2 + 1];
+    if (m.exact) {
+        char* q = literal[lang];
+        for (int i = 0; i < m.dwellN; i++) {
+            uint32_t cp = d.base + m.dwell[i];
+            if (cp < 0x80) {
+                *q++ = char(cp);
+            } else {
+                *q++ = char(0xC0 | (cp >> 6));
+                *q++ = char(0x80 | (cp & 0x3F));
+            }
+        }
+        float score;
+        if (m.score(literal[lang], q, score)) best.add(score, literal[lang], q - literal[lang]);
+    }
     size_t checks = 0;
     for (int si = 0; si < sn; si++) {
         for (int ei = 0; ei < en; ei++) {
@@ -461,10 +572,10 @@ bool addSample(settings::Lang lang, const Point* path, size_t n, const LetterKey
     dx /= N;
     dy /= N;
     float spread = 0;
-    for (int i = 0; i < N; i++) spread += std::hypot(user[i].x - dx - tmplN[i].x, user[i].y - dy - tmplN[i].y);
+    for (int i = 0; i < N; i++) spread += dist({user[i].x - dx, user[i].y - dy}, tmplN[i]);
     spread /= N * float(keyW);
     // путь совсем не похож на слово — не учимся на случайности
-    if (spread > 1.2f || std::hypot(dx, dy) > keyW) return false;
+    if (spread > 1.2f || sqrtf(dx * dx + dy * dy) > keyW) return false;
     // скользящее среднее: первые образцы весят много, потом по 1/MAX_SAMPLES_WEIGHT
     calib.samples = std::min<uint16_t>(calib.samples + 1, MAX_SAMPLES_WEIGHT);
     float w = 1.0f / calib.samples;
@@ -476,6 +587,90 @@ bool addSample(settings::Lang lang, const Point* path, size_t n, const LetterKey
     dirty = true;
     changedAt = millis();
     return true;
+}
+
+bool known(settings::Lang lang, const char* word, size_t len) {
+    const Dict& d = dicts[lang];
+    if (findRank(d, word, len) != NO_RANK) return true;
+    for (const UserWord& u : userWords)
+        if (u.count && u.lang == lang && strlen(u.text) == len && !memcmp(u.text, word, len)) return true;
+    return false;
+}
+
+size_t complete(settings::Lang lang, const char* prefix, size_t len, Word* out, size_t maxOut) {
+    const Dict& d = dicts[lang];
+    const char* p = prefix;
+    int f = len ? letterIndex(d, nextCp(p, prefix + len)) : -1;
+    if (f < 0 || !d.words) return 0;
+    size_t n = 0;
+    auto add = [&](const char* text, size_t textLen) {
+        for (size_t i = 0; i < n; i++)
+            if (out[i].len == textLen && !memcmp(out[i].text, text, textLen)) return;
+        out[n++] = {text, uint8_t(textLen), 0};
+    };
+    // сначала выученные (их выбирали сами), потом словарь по частоте
+    for (const UserWord& u : userWords) {
+        if (n == maxOut) break;
+        size_t ul = strlen(u.text);
+        bool usable = u.rank != NO_RANK || u.count >= 2;
+        if (u.count && usable && u.lang == lang && ul > len && !memcmp(u.text, prefix, len)) add(u.text, ul);
+    }
+    for (uint32_t k = d.firstStart[f]; k < d.firstStart[f + 1] && n < maxOut; k++) {
+        const char* w = d.text + d.wordOff[d.firstWords[k]];
+        if (strncmp(w, prefix, len)) continue;
+        size_t wl = strchr(w, '\n') - w;
+        if (wl > len) add(w, wl);
+    }
+    return n;
+}
+
+namespace {
+
+// слова отличаются на одну правку: замена, вставка, удаление или перестановка соседних букв
+bool oneEdit(const uint32_t* a, int la, const uint32_t* b, int lb, bool allowSubst) {
+    if (std::abs(la - lb) > 1) return false;
+    int i = 0;
+    while (i < la && i < lb && a[i] == b[i]) i++;
+    if (i == la && i == lb) return false;  // совпадают
+    if (la == lb) {
+        // перестановка соседних
+        if (i + 1 < la && a[i] == b[i + 1] && a[i + 1] == b[i] && !memcmp(a + i + 2, b + i + 2, (la - i - 2) * 4)) return true;
+        return allowSubst && !memcmp(a + i + 1, b + i + 1, (la - i - 1) * 4);
+    }
+    // лишняя буква в более длинном
+    const uint32_t* lng = la > lb ? a : b;
+    const uint32_t* sht = la > lb ? b : a;
+    int ls = std::min(la, lb);
+    return !memcmp(lng + i + 1, sht + i, (ls - i) * 4);
+}
+
+int toCps(const char* p, const char* e, uint32_t* out, int maxOut) {
+    int n = 0;
+    while (p < e && n < maxOut) out[n++] = nextCp(p, e);
+    return p < e ? -1 : n;
+}
+
+}  // namespace
+
+bool correct(settings::Lang lang, const char* word, size_t len, Word& out) {
+    const Dict& d = dicts[lang];
+    uint32_t w[32], c[32];
+    int lw = toCps(word, word + len, w, 32);
+    if (lw < MIN_CORRECT_LEN || !d.words || known(lang, word, len)) return false;
+    int f = letterIndex(d, w[0]);
+    if (f < 0) return false;
+    // ранги по возрастанию: первое подходящее слово — самое частое
+    for (uint32_t k = d.firstStart[f]; k < d.firstStart[f + 1]; k++) {
+        uint32_t rank = d.firstWords[k];
+        if (rank > MAX_CORRECT_RANK) break;
+        const char* p = d.text + d.wordOff[rank];
+        const char* e = strchr(p, '\n');
+        int lc = toCps(p, e, c, 32);
+        if (lc < 0 || !oneEdit(w, lw, c, lc, lw >= MIN_SUBST_LEN)) continue;
+        out = {p, uint8_t(e - p), 0};
+        return true;
+    }
+    return false;
 }
 
 void resetCalibration() {
