@@ -38,6 +38,7 @@ void load() {
     values.lang = Lang(prefs.getUChar("lang", values.lang));
     values.bluetooth = prefs.getBool("bt", values.bluetooth);
     values.macHost = prefs.getBool("cmd", values.macHost);
+    values.bilingual = prefs.getBool("bi", values.bilingual);
     values.target = prefs.getUChar("target", values.target);
     prefs.getString("taddr", values.targetAddr, sizeof values.targetAddr);
     prefs.end();
@@ -55,6 +56,7 @@ void save() {
     prefs.putUChar("lang", values.lang);
     prefs.putBool("bt", values.bluetooth);
     prefs.putBool("cmd", values.macHost);
+    prefs.putBool("bi", values.bilingual);
     prefs.putUChar("target", values.target);
     prefs.putString("taddr", values.targetAddr);
     prefs.end();

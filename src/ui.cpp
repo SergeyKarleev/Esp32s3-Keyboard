@@ -288,6 +288,17 @@ void createSettings() {
         },
         LV_EVENT_VALUE_CHANGED, nullptr);
 
+    row = settingsRow(settingsPanel, "Свайп сразу на EN и RU");
+    sw = lv_switch_create(row);
+    if (settings::get().bilingual) lv_obj_add_state(sw, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(
+        sw,
+        [](lv_event_t* e) {
+            settings::get().bilingual = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+            keyboard::refresh();
+        },
+        LV_EVENT_VALUE_CHANGED, nullptr);
+
     row = settingsRow(settingsPanel, "Mac: Cmd и русская раскладка Mac");
     sw = lv_switch_create(row);
     if (settings::get().macHost) lv_obj_add_state(sw, LV_STATE_CHECKED);

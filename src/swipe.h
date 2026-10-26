@@ -23,6 +23,7 @@ struct LetterKey {
 struct Word {
     const char* text;  // UTF-8, без завершающего нуля
     uint8_t len;       // байт
+    float score;       // меньше — лучше; сравним между языками
 };
 
 // построить индексы словарей (PSRAM); вызвать один раз при старте

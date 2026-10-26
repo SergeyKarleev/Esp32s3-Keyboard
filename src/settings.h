@@ -18,6 +18,8 @@ struct Values {
     bool bluetooth = true;
     // получатель — Mac: копировать/вставить через Cmd, русская раскладка macOS
     bool macHost = false;
+    // свайп ищет слова сразу в английском и русском, раскладка переключается сама
+    bool bilingual = true;
     // куда отправлять нажатия: hid::TargetKind и адрес Bluetooth-хоста
     uint8_t target = 0;
     char targetAddr[18] = "";

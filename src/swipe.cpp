@@ -350,7 +350,7 @@ size_t decode(settings::Lang lang, const Point* path, size_t n, const LetterKey*
         best.add(score + freqPenalty - USER_WEIGHT * std::log(1.0f + u.count), p, e - p);
     }
 
-    for (size_t i = 0; i < best.n; i++) out[i] = {best.items[i].text, best.items[i].len};
+    for (size_t i = 0; i < best.n; i++) out[i] = {best.items[i].text, best.items[i].len, best.items[i].score};
     return best.n;
 }
 

@@ -151,6 +151,10 @@ uint16_t trailLen = 0;
 // последнее набранное свайпом слово (для замены подсказкой) и варианты
 char suggest[MAX_SUGGEST][64];
 const char* suggestPtrs[MAX_SUGGEST];
+settings::Lang suggestLang[MAX_SUGGEST];
+// штраф к счету слова на неактивном языке (в ширинах клавиши)
+constexpr float OTHER_LANG_PENALTY = 0.12f;
+constexpr uint32_t LANG_SWITCH_MS = 60;
 size_t suggestCount = 0;
 size_t lastTypedChars = 0;  // символов последнего слова вместе с пробелом
 bool lastCapital = false;
@@ -319,12 +323,11 @@ uint32_t labelCp(const char* s) {
     return swipe::nextCp(p, s + strlen(s));
 }
 
-// буквы текущего языка на экране: codepoint и центр клавиши
-size_t letterKeys(swipe::LetterKey* out, size_t maxOut, int& keyW) {
+// буквы языка на экране: codepoint и центр клавиши (раскладки совпадают по позициям)
+size_t letterKeys(settings::Lang lang, swipe::LetterKey* out, size_t maxOut, int& keyW) {
     auto* bm = reinterpret_cast<lv_btnmatrix_t*>(matrix);
     lv_area_t c;
     lv_obj_get_coords(matrix, &c);
-    settings::Lang lang = settings::get().lang;
     size_t n = 0;
     keyW = 40;
     for (uint16_t i = 0; i < btnCount && n < maxOut; i++) {
@@ -339,9 +342,19 @@ size_t letterKeys(swipe::LetterKey* out, size_t maxOut, int& keyW) {
     return n;
 }
 
-// набрать слово кодами клавиш текущего языка; возвращает число символов
-size_t typeText(const char* text, size_t len, bool capital, bool allCaps) {
-    settings::Lang lang = settings::get().lang;
+// перевести получателя и подписи на язык слова
+void ensureLang(settings::Lang lang) {
+    if (settings::get().lang == lang) return;
+    settings::get().lang = lang;
+    settings::sendHotkey();
+    // получатель переключает раскладку не мгновенно
+    delay(LANG_SWITCH_MS);
+    settings::save();
+    build();
+}
+
+// набрать слово кодами клавиш языка lang; возвращает число символов
+size_t typeText(settings::Lang lang, const char* text, size_t len, bool capital, bool allCaps) {
     const char* p = text;
     const char* end = text + len;
     size_t count = 0;
@@ -358,32 +371,53 @@ size_t typeText(const char* text, size_t len, bool capital, bool allCaps) {
     return count;
 }
 
-void typeWord(const char* text) {
-    lastTypedChars = typeText(text, strlen(text), lastCapital, lastAllCaps) + 1;
+void typeWord(size_t i) {
+    ensureLang(suggestLang[i]);
+    lastTypedChars = typeText(suggestLang[i], suggestPtrs[i], strlen(suggestPtrs[i]), lastCapital, lastAllCaps) + 1;
     hid::tapKey(0, HK_SPACE);
 }
 
 void finishSwipe() {
-    swipe::LetterKey keys[40];
-    int keyW;
-    size_t keyCount = letterKeys(keys, 40, keyW);
-    swipe::Word words[MAX_SUGGEST];
+    settings::Lang cur = settings::get().lang;
+    settings::Lang other = cur == settings::RU ? settings::EN : settings::RU;
+    swipe::Word words[2 * MAX_SUGGEST];
+    settings::Lang langs[2 * MAX_SUGGEST];
     uint32_t t = millis();
-    size_t n = swipe::decode(settings::get().lang, path, pathLen, keys, keyCount, keyW, words, MAX_SUGGEST);
+    size_t n = 0;
+    for (settings::Lang lang : {cur, other}) {
+        if (lang == other && !settings::get().bilingual) break;
+        swipe::LetterKey keys[40];
+        int keyW;
+        size_t keyCount = letterKeys(lang, keys, 40, keyW);
+        size_t got = swipe::decode(lang, path, pathLen, keys, keyCount, keyW, words + n, MAX_SUGGEST);
+        for (size_t k = n; k < n + got; k++) {
+            langs[k] = lang;
+            // другой язык — только если заметно лучше: раскладка не переключается от случайных совпадений
+            if (lang == other) words[k].score += OTHER_LANG_PENALTY;
+        }
+        n += got;
+    }
+    // лучшие из обоих языков
+    size_t order[2 * MAX_SUGGEST];
+    for (size_t k = 0; k < n; k++) order[k] = k;
+    std::sort(order, order + n, [&](size_t a, size_t b) { return words[a].score < words[b].score; });
+    n = std::min(n, MAX_SUGGEST);
     Serial.printf("[swipe] %u points -> %u words in %u ms\n", pathLen, n, millis() - t);
     if (!n) return;
     for (size_t i = 0; i < n; i++) {
-        size_t len = std::min<size_t>(words[i].len, sizeof suggest[i] - 1);
-        memcpy(suggest[i], words[i].text, len);
+        const swipe::Word& w = words[order[i]];
+        size_t len = std::min<size_t>(w.len, sizeof suggest[i] - 1);
+        memcpy(suggest[i], w.text, len);
         suggest[i][len] = 0;
         suggestPtrs[i] = suggest[i];
+        suggestLang[i] = langs[order[i]];
     }
     suggestCount = n;
     typedLen = 0;
-    swipe::learn(settings::get().lang, suggest[0], strlen(suggest[0]), 1);
+    swipe::learn(suggestLang[0], suggest[0], strlen(suggest[0]), 1);
     lastCapital = shift != ShiftState::Off;
     lastAllCaps = shift == ShiftState::Locked;
-    typeWord(suggest[0]);
+    typeWord(0);
     sticky = 0;
     if (shift == ShiftState::Once) {
         shift = ShiftState::Off;
@@ -410,7 +444,9 @@ void trackPath(lv_event_code_t code) {
     if (code == LV_EVENT_PRESSED) {
         uint16_t id = lv_btnmatrix_get_selected_btn(matrix);
         const Btn* b = id < btnCount ? byId[id] : nullptr;
-        pathFromLetter = layer == 0 && b && b->act == Act::Key && !b->label && isLetter(b->code, settings::get().lang);
+        bool letter = b && b->act == Act::Key && !b->label &&
+                      (isLetter(b->code, settings::get().lang) || (settings::get().bilingual && isLetter(b->code, settings::RU)));
+        pathFromLetter = layer == 0 && letter;
         pathLen = 0;
         swiping = false;
         repeated = false;
@@ -503,6 +539,33 @@ void onDraw(lv_event_t* e) {
         dsc->rect_dsc->bg_color = theme::keySpecial();
 }
 
+// при свайпе на двух языках — мелкая серая подпись второго языка в углу клавиши
+void onDrawEnd(lv_event_t* e) {
+    if (!settings::get().bilingual || layer != 0) return;
+    lv_obj_draw_part_dsc_t* dsc = lv_event_get_draw_part_dsc(e);
+    if (dsc->part != LV_PART_ITEMS || dsc->id >= btnCount) return;
+    const Btn& b = *byId[dsc->id];
+    const Glyph* g = b.act == Act::Key && !b.label ? findGlyph(b.code) : nullptr;
+    if (!g) return;
+    bool s = shifted(b.code);
+    const char* text = settings::get().lang == settings::RU ? (s ? g->enShift : g->en) : (s ? g->ruShift : g->ru);
+    lv_draw_label_dsc_t ld;
+    lv_draw_label_dsc_init(&ld);
+    ld.font = theme::small();
+    ld.color = theme::muted();
+    ld.align = LV_TEXT_ALIGN_RIGHT;
+    // draw_area здесь — область подписи, координаты клавиши берем у btnmatrix
+    lv_area_t a = reinterpret_cast<lv_btnmatrix_t*>(matrix)->button_areas[dsc->id];
+    lv_area_t c;
+    lv_obj_get_coords(matrix, &c);
+    lv_area_move(&a, c.x1, c.y1);
+    a.x1 = a.x2 - 24;
+    a.x2 -= 4;
+    a.y1 += 3;
+    a.y2 = a.y1 + lv_font_get_line_height(ld.font);
+    lv_draw_label(dsc->draw_ctx, &ld, &a, text, nullptr);
+}
+
 }  // namespace
 
 void create(lv_obj_t* parent) {
@@ -525,6 +588,7 @@ void create(lv_obj_t* parent) {
 
     lv_obj_add_event_cb(matrix, onEvent, LV_EVENT_ALL, nullptr);
     lv_obj_add_event_cb(matrix, onDraw, LV_EVENT_DRAW_PART_BEGIN, nullptr);
+    lv_obj_add_event_cb(matrix, onDrawEnd, LV_EVENT_DRAW_PART_END, nullptr);
 
     // след пальца при свайпе
     trail = lv_line_create(parent);
@@ -550,9 +614,10 @@ void pickSuggestion(size_t i) {
     if (i == 0 || i >= suggestCount) return;
     for (size_t k = 0; k < lastTypedChars; k++) hid::tapKey(0, HK_BACKSPACE);
     std::swap(suggestPtrs[0], suggestPtrs[i]);
+    std::swap(suggestLang[0], suggestLang[i]);
     // выбранный вариант важнее автоматически набранного
-    swipe::learn(settings::get().lang, suggestPtrs[0], strlen(suggestPtrs[0]), 3);
-    typeWord(suggestPtrs[0]);
+    swipe::learn(suggestLang[0], suggestPtrs[0], strlen(suggestPtrs[0]), 3);
+    typeWord(0);
     notifySuggestions();
 }
 
