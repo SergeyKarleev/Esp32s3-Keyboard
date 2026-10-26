@@ -546,17 +546,6 @@ size_t letterKeys(settings::Lang lang, swipe::LetterKey* out, size_t maxOut, int
     return n;
 }
 
-// перевести получателя и подписи на язык слова
-void ensureLang(settings::Lang lang) {
-    if (settings::get().lang == lang) return;
-    settings::get().lang = lang;
-    settings::sendHotkey();
-    // получатель переключает раскладку не мгновенно
-    delay(LANG_SWITCH_MS);
-    settings::save();
-    build();
-}
-
 // набрать слово кодами клавиш языка lang; возвращает число символов
 size_t typeText(settings::Lang lang, const char* text, size_t len, bool capital, bool allCaps) {
     const char* p = text;
@@ -575,9 +564,18 @@ size_t typeText(settings::Lang lang, const char* text, size_t len, bool capital,
     return count;
 }
 
+// слово другого языка: получатель переключается только на время слова, раскладка на экране не меняется
 void typeWord(size_t i) {
-    ensureLang(suggestLang[i]);
+    bool foreign = suggestLang[i] != settings::get().lang;
+    if (foreign) {
+        settings::sendHotkey();
+        delay(LANG_SWITCH_MS);
+    }
     lastTypedChars = typeText(suggestLang[i], suggestPtrs[i], strlen(suggestPtrs[i]), lastCapital, lastAllCaps) + 1;
+    if (foreign) {
+        settings::sendHotkey();
+        delay(LANG_SWITCH_MS);
+    }
     hid::tapKey(0, HK_SPACE);
 }
 
