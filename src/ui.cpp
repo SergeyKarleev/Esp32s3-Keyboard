@@ -32,6 +32,9 @@ lv_obj_t* settingsPanel = nullptr;
 // середина панели: быстрые действия или варианты слова после свайпа
 lv_obj_t* actionsBox = nullptr;
 lv_obj_t* suggestBox = nullptr;
+// подсказка режима тренировки вместо быстрых действий; тап — выход из тренировки
+lv_obj_t* promptBox = nullptr;
+lv_obj_t* promptLabel = nullptr;
 lv_obj_t* btSwitch = nullptr;
 lv_obj_t* deviceList = nullptr;
 
@@ -67,6 +70,29 @@ lv_obj_t* makeBarButton(lv_obj_t* parent, const char* text, lv_event_cb_t cb, vo
     lv_obj_center(l);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
     return b;
+}
+
+// значок тачпада: в шрифте символов такого нет — рамка поля и две кнопки снизу
+void addTouchpadIcon(lv_obj_t* btn) {
+    lv_obj_t* l = lv_obj_get_child(btn, 0);
+    lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t* frame = lv_obj_create(btn);
+    lv_obj_remove_style_all(frame);
+    lv_obj_set_size(frame, 20, 16);
+    lv_obj_center(frame);
+    lv_obj_clear_flag(frame, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_border_width(frame, 2, 0);
+    lv_obj_set_style_border_color(frame, theme::text(), 0);
+    lv_obj_set_style_radius(frame, 3, 0);
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t* key = lv_obj_create(frame);
+        lv_obj_remove_style_all(key);
+        lv_obj_clear_flag(key, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_size(key, 7, 3);
+        lv_obj_set_style_bg_color(key, theme::text(), 0);
+        lv_obj_set_style_bg_opa(key, LV_OPA_COVER, 0);
+        lv_obj_align(key, LV_ALIGN_BOTTOM_LEFT, 2 + i * 8, -2);
+    }
 }
 
 lv_obj_t* makeBarLabel(lv_obj_t* parent, const char* text) {
@@ -198,6 +224,18 @@ void showSuggestions(const char* const* words, size_t n) {
     }
 }
 
+void showPrompt(const char* text) {
+    if (text) {
+        lv_label_set_text(promptLabel, text);
+        lv_obj_clear_flag(promptBox, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(actionsBox, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(suggestBox, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_add_flag(promptBox, LV_OBJ_FLAG_HIDDEN);
+    showSuggestions(nullptr, 0);
+}
+
 void setBluetooth(bool on) {
     settings::get().bluetooth = on;
     settings::save();
@@ -321,9 +359,24 @@ void createSettings() {
     lv_obj_t* forget = makeBarButton(row, LV_SYMBOL_TRASH " Забыть устройства", [](lv_event_t*) { hid::forgetBonds(); });
     lv_obj_set_height(forget, 34);
 
-    row = settingsRow(settingsPanel, "Выученные слова");
-    lv_obj_t* words = makeBarButton(row, LV_SYMBOL_TRASH " Забыть слова", [](lv_event_t*) { swipe::forget(); });
-    lv_obj_set_height(words, 34);
+    row = settingsRow(settingsPanel, "Свайп под тебя");
+    lv_obj_t* box = lv_obj_create(row);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(box, 6, 0);
+    lv_obj_t* train = makeBarButton(box, LV_SYMBOL_EDIT " Тренировка", [](lv_event_t*) {
+        closeSettings(nullptr);
+        setMode(Mode::Keyboard);
+        keyboard::startTraining();
+    });
+    lv_obj_set_height(train, 34);
+    // забыть выученные слова и калибровку
+    lv_obj_t* reset = makeBarButton(box, LV_SYMBOL_TRASH " Сброс", [](lv_event_t*) {
+        swipe::forget();
+        swipe::resetCalibration();
+    });
+    lv_obj_set_height(reset, 34);
 
     lv_obj_t* info = lv_label_create(settingsPanel);
     lv_label_set_text_fmt(info,
@@ -355,7 +408,8 @@ void create() {
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     tabKeyboard = makeBarButton(bar, LV_SYMBOL_KEYBOARD, [](lv_event_t*) { setMode(Mode::Keyboard); });
-    tabTrackpad = makeBarButton(bar, "Пад", [](lv_event_t*) { setMode(Mode::Trackpad); });
+    tabTrackpad = makeBarButton(bar, LV_SYMBOL_KEYBOARD, [](lv_event_t*) { setMode(Mode::Trackpad); });
+    addTouchpadIcon(tabTrackpad);
 
     actionsBox = makeBox(bar);
     for (size_t i = 0; i < sizeof QUICK / sizeof QUICK[0]; i++) {
@@ -366,6 +420,15 @@ void create() {
     suggestBox = makeBox(bar);
     lv_obj_add_flag(suggestBox, LV_OBJ_FLAG_HIDDEN);
     keyboard::onSuggestions(showSuggestions);
+    promptBox = makeBox(bar);
+    lv_obj_add_flag(promptBox, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(promptBox, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(
+        promptBox, [](lv_event_t*) { keyboard::stopTraining(); }, LV_EVENT_CLICKED, nullptr);
+    promptLabel = lv_label_create(promptBox);
+    lv_obj_set_style_text_font(promptLabel, theme::medium(), 0);
+    lv_obj_set_style_text_color(promptLabel, theme::accent(), 0);
+    keyboard::onPrompt(showPrompt);
 
     langLabel = makeBarLabel(bar, "EN");
     lv_obj_set_style_text_color(langLabel, theme::text(), 0);

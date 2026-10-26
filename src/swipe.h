@@ -40,6 +40,12 @@ void poll();
 // забыть выученные слова
 void forget();
 
+// образец для калибровки: путь, которым пользователь провел слово word (UTF-8);
+// false — путь слишком не похож на слово и не учтен
+bool addSample(settings::Lang lang, const Point* path, size_t n, const LetterKey* keys, size_t keyCount, int keyW,
+               const char* word, size_t len);
+void resetCalibration();
+
 // следующий символ UTF-8 (codepoint), p сдвигается
 uint32_t nextCp(const char*& p, const char* end);
 

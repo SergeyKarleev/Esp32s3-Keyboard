@@ -100,7 +100,8 @@ void setHeld(uint8_t b) {
 }
 
 void moveCursor(float dx, float dy) {
-    float base = 0.4f + settings::get().speed * 0.25f;
+    // при скорости 5 один жест через поле проводит курсор по диагонали экрана 1080p
+    float base = 0.7f + settings::get().speed * 0.35f;
     float v = std::min(std::sqrt(dx * dx + dy * dy), 40.0f);
     float gain = base * (1.0f + v / 6.0f);
     g.remX += dx * gain;

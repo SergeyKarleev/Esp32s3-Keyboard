@@ -18,4 +18,11 @@ void onSuggestions(SuggestCallback cb);
 // заменить последнее набранное свайпом слово вариантом i
 void pickSuggestion(size_t i);
 
+// подсказка в верхней панели (режим тренировки); nullptr — убрать
+using PromptCallback = void (*)(const char* text);
+void onPrompt(PromptCallback cb);
+// тренировка свайпа: пользователь проводит показанные слова, распознавание подстраивается под него
+void startTraining();
+void stopTraining();
+
 }  // namespace keyboard

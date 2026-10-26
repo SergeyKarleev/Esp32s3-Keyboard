@@ -66,7 +66,7 @@ bool isLetter(uint8_t code, settings::Lang lang) {
     return code == 0x2F || code == 0x30 || code == 0x33 || code == 0x34 || code == 0x36 || code == 0x37 || code == 0x35;
 }
 
-enum class Act : uint8_t { Row, Key, Shift, Ctrl, Alt, Gui, Lang, Sym, Abc, Media, Comma, Period };
+enum class Act : uint8_t { Row, Key, Shift, Ctrl, Alt, Gui, Lang, Abc, Media, Comma, Period, Char, Num, Fn };
 
 struct Btn {
     Act act;
@@ -80,7 +80,10 @@ constexpr Btn ROW{Act::Row, 0, 0, nullptr};
 
 constexpr Btn key(uint8_t code, uint8_t w = 2, const char* label = nullptr) { return {Act::Key, code, w, label}; }
 
-// нижний ряд одинаков в обоих слоях, кроме кнопки переключения слоя
+// символ по значению: код клавиши подбирается под раскладку получателя
+constexpr Btn ch(char c, const char* label, uint8_t w = 2) { return {Act::Char, uint16_t(c), w, label}; }
+
+// нижний ряд букв и служебного слоя, отличается кнопкой переключения слоя
 #define BOTTOM_ROW(layerBtn)                                                                              \
     layerBtn, {Act::Lang, 0, 3, nullptr}, {Act::Comma, 0, 2, ","}, key(HK_SPACE, 6, " "),                \
         {Act::Period, 0, 2, "."}, key(HK_LEFT, 2, LV_SYMBOL_LEFT),                                        \
@@ -93,27 +96,44 @@ const Btn ALPHA[] = {
     key(0x34), key(HK_BACKSPACE, 3, LV_SYMBOL_BACKSPACE), ROW,
     {Act::Shift, 0, 3, LV_SYMBOL_UPLOAD}, key(0x1D), key(0x1B), key(0x06), key(0x19), key(0x05), key(0x11),
     key(0x10), key(0x36), key(0x37), key(0x38), key(HK_ENTER, 3, LV_SYMBOL_NEW_LINE), ROW,
-    BOTTOM_ROW((Btn{Act::Sym, 0, 3, "?123"})),
+    BOTTOM_ROW((Btn{Act::Num, 0, 3, "?123"})),
 };
 
-const Btn SYMBOLS[] = {
-    key(0x35), key(0x1E), key(0x1F), key(0x20), key(0x21), key(0x22), key(0x23), key(0x24), key(0x25), key(0x26),
-    key(0x27), key(0x2D), key(0x2E), ROW,
-    key(HK_ESC, 2, "Esc"), key(HK_TAB, 2, "Tab"), key(0x31), key(HK_DELETE, 2, "Del"), key(HK_HOME, 2, "Home"),
-    key(HK_END, 2, "End"), key(HK_PAGE_UP, 2, "PgUp"), key(HK_PAGE_DOWN, 2, "PgDn"),
+// цифры справа, частые символы программиста слева
+const Btn NUMBERS[] = {
+    ch('!', "!"), ch('@', "@"), ch('#', "#"), ch('$', "$"), ch('%', "%"), ch('^', "^"), ch('&', "&"), ch('*', "*"),
+    ch('7', "7"), ch('8', "8"), ch('9', "9"), key(HK_BACKSPACE, 3, LV_SYMBOL_BACKSPACE), ROW,
+    ch('-', "-"), ch('_', "_"), ch('=', "="), ch('+', "+"), ch('/', "/"), ch('\\', "\\"), ch('|', "|"), ch('`', "`"),
+    ch('4', "4"), ch('5', "5"), ch('6', "6"), key(HK_ENTER, 3, LV_SYMBOL_NEW_LINE), ROW,
+    ch('(', "("), ch(')', ")"), ch('[', "["), ch(']', "]"), ch('{', "{"), ch('}', "}"), ch('<', "<"), ch('>', ">"),
+    ch('1', "1"), ch('2', "2"), ch('3', "3"), ch(',', ",", 3), ROW,
+    {Act::Abc, 0, 3, "ABC"}, {Act::Fn, 0, 2, "Fn"}, ch('"', "\""), ch('\'', "'"), ch(':', ":"), ch(';', ";"),
+    ch('?', "?"), ch('~', "~"), ch('0', "0", 3), ch('.', "."), key(HK_SPACE, 3, " "),
+};
+
+// служебные клавиши: F1–F12, навигация, модификаторы, мультимедиа
+const Btn FUNCTIONS[] = {
+    key(HK_F1, 2, "F1"), key(HK_F1 + 1, 2, "F2"), key(HK_F1 + 2, 2, "F3"), key(HK_F1 + 3, 2, "F4"),
+    key(HK_F1 + 4, 2, "F5"), key(HK_F1 + 5, 2, "F6"), key(HK_F1 + 6, 2, "F7"), key(HK_F1 + 7, 2, "F8"),
+    key(HK_F1 + 8, 2, "F9"), key(HK_F1 + 9, 2, "F10"), key(HK_F1 + 10, 2, "F11"), key(HK_F1 + 11, 2, "F12"), ROW,
+    key(HK_ESC, 2, "Esc"), key(HK_TAB, 2, "Tab"), key(HK_INSERT, 2, "Ins"), key(HK_DELETE, 2, "Del"),
+    key(HK_HOME, 2, "Home"), key(HK_END, 2, "End"), key(HK_PAGE_UP, 2, "PgUp"), key(HK_PAGE_DOWN, 2, "PgDn"),
     key(HK_BACKSPACE, 3, LV_SYMBOL_BACKSPACE), ROW,
     {Act::Shift, 0, 3, LV_SYMBOL_UPLOAD}, {Act::Ctrl, 0, 2, "Ctrl"}, {Act::Alt, 0, 2, "Alt"}, {Act::Gui, 0, 2, "Win"},
     {Act::Media, hid::CC_VOL_DOWN, 2, LV_SYMBOL_VOLUME_MID "-"}, {Act::Media, hid::CC_VOL_UP, 2, LV_SYMBOL_VOLUME_MAX "+"},
     {Act::Media, hid::CC_MUTE, 2, LV_SYMBOL_MUTE "x"}, {Act::Media, hid::CC_PLAY_PAUSE, 2, LV_SYMBOL_PLAY},
     key(HK_ENTER, 3, LV_SYMBOL_NEW_LINE), ROW,
-    BOTTOM_ROW((Btn{Act::Abc, 0, 3, "ABC"})),
+    BOTTOM_ROW((Btn{Act::Num, 0, 3, "123"})),
 };
 
 struct Layer {
     const Btn* btns;
     size_t count;
 };
-const Layer LAYERS[] = {{ALPHA, sizeof ALPHA / sizeof ALPHA[0]}, {SYMBOLS, sizeof SYMBOLS / sizeof SYMBOLS[0]}};
+enum : uint8_t { LAYER_ALPHA, LAYER_NUM, LAYER_FN };
+const Layer LAYERS[] = {{ALPHA, sizeof ALPHA / sizeof ALPHA[0]},
+                        {NUMBERS, sizeof NUMBERS / sizeof NUMBERS[0]},
+                        {FUNCTIONS, sizeof FUNCTIONS / sizeof FUNCTIONS[0]}};
 
 constexpr size_t MAX_BTNS = 64;
 
@@ -154,7 +174,8 @@ const char* suggestPtrs[MAX_SUGGEST];
 settings::Lang suggestLang[MAX_SUGGEST];
 // штраф к счету слова на неактивном языке (в ширинах клавиши)
 constexpr float OTHER_LANG_PENALTY = 0.12f;
-constexpr uint32_t LANG_SWITCH_MS = 60;
+// получатель переключает раскладку не мгновенно (macOS — до ~250 мс): раньше буквы уйдут в старую
+constexpr uint32_t LANG_SWITCH_MS = 300;
 size_t suggestCount = 0;
 size_t lastTypedChars = 0;  // символов последнего слова вместе с пробелом
 bool lastCapital = false;
@@ -163,6 +184,27 @@ SuggestCallback suggestCb = nullptr;
 // слово, набираемое по буквам: запоминается после пробела или Enter
 char typed[32];
 size_t typedLen = 0;
+
+// последний свайп: образец для калибровки, если слово исправят
+swipe::Point lastPath[MAX_PATH];
+size_t lastPathLen = 0;
+// свайпнутое слово стерли и набирают по буквам — значит, свайп означал набираемое слово
+enum class Fix : uint8_t { None, AfterSwipe, Erased };
+Fix fix = Fix::None;
+
+// режим тренировки: слова показываются сверху, свайпы не печатаются, а калибруют распознавание
+struct TrainWord {
+    const char* text;
+    settings::Lang lang;
+};
+const TrainWord TRAIN_WORDS[] = {
+    {"привет", settings::RU}, {"hello", settings::EN},    {"клавиатура", settings::RU}, {"keyboard", settings::EN},
+    {"работа", settings::RU}, {"github", settings::EN},   {"проверка", settings::RU},   {"commit", settings::EN},
+    {"сегодня", settings::RU}, {"deploy", settings::EN},  {"задача", settings::RU},     {"world", settings::EN},
+};
+constexpr size_t TRAIN_COUNT = sizeof TRAIN_WORDS / sizeof TRAIN_WORDS[0];
+int trainIdx = -1;
+PromptCallback promptCb = nullptr;
 
 bool shifted(uint8_t code) {
     if (shift == ShiftState::Once) return true;
@@ -194,7 +236,10 @@ bool isChecked(const Btn& b) {
     }
 }
 
-bool isSpecial(const Btn& b) { return b.act != Act::Key || b.label != nullptr; }
+bool isSpecial(const Btn& b) {
+    if (b.act == Act::Char) return false;
+    return b.act != Act::Key || b.label != nullptr;
+}
 
 void build() {
     const Layer& l = LAYERS[layer];
@@ -219,7 +264,7 @@ void build() {
     map[m] = "";
     lv_btnmatrix_set_map(matrix, map);
     lv_btnmatrix_set_ctrl_map(matrix, ctrl);
-    lv_obj_set_style_text_font(matrix, layer == 0 ? theme::large() : theme::medium(), LV_PART_ITEMS);
+    lv_obj_set_style_text_font(matrix, layer == LAYER_FN ? theme::medium() : theme::large(), LV_PART_ITEMS);
 }
 
 void notifySuggestions() {
@@ -243,21 +288,40 @@ const char* letterText(uint8_t code) {
     return lang == settings::RU ? g->ru : g->en;
 }
 
+size_t letterKeys(settings::Lang lang, swipe::LetterKey* out, size_t maxOut, int& keyW);
+
+void sampleLastSwipe(settings::Lang lang, const char* word, size_t len) {
+    swipe::LetterKey keys[40];
+    int keyW;
+    size_t keyCount = letterKeys(lang, keys, 40, keyW);
+    swipe::addSample(lang, lastPath, lastPathLen, keys, keyCount, keyW, word, len);
+}
+
 void trackTyped(uint8_t code, uint8_t mods) {
     const char* letter = (mods & ~hid::MOD_SHIFT) ? nullptr : letterText(code);
     if (letter && typedLen + strlen(letter) < sizeof typed) {
+        // дописывают к свайпнутому слову, не стерев его — это не исправление
+        if (fix == Fix::AfterSwipe) fix = Fix::None;
         memcpy(typed + typedLen, letter, strlen(letter));
         typedLen += strlen(letter);
         return;
     }
-    if (code == HK_BACKSPACE && typedLen) {
+    if (code == HK_BACKSPACE) {
+        if (fix == Fix::AfterSwipe) fix = Fix::Erased;
+        if (!typedLen) return;
         // убрать последний символ UTF-8
         do typedLen--;
         while (typedLen && (typed[typedLen] & 0xC0) == 0x80);
         return;
     }
-    if (typedLen && (code == HK_SPACE || code == HK_ENTER || code == 0x36 || code == 0x37 || code == 0x38))
-        swipe::learn(settings::get().lang, typed, typedLen, 1);
+    if (typedLen && (code == HK_SPACE || code == HK_ENTER || code == 0x36 || code == 0x37 || code == 0x38)) {
+        settings::Lang lang = settings::get().lang;
+        bool corrected = fix == Fix::Erased;
+        // исправленное слово — сильный сигнал: и в словарь, и образцом пути
+        swipe::learn(lang, typed, typedLen, corrected ? 3 : 1);
+        if (corrected) sampleLastSwipe(lang, typed, typedLen);
+    }
+    fix = Fix::None;
     typedLen = 0;
 }
 
@@ -272,6 +336,66 @@ void typePunct(bool period) {
         hid::tapKey(hid::MOD_SHIFT, period ? 0x24 : 0x23);
     else
         hid::tapKey(period ? 0 : hid::MOD_SHIFT, 0x38);
+}
+
+// клавиша, дающая символ в раскладке получателя
+struct Stroke {
+    char c;
+    uint8_t code;
+    bool shift;
+};
+// US
+const Stroke STROKES_EN[] = {
+    {'!', 0x1E, 1}, {'@', 0x1F, 1}, {'#', 0x20, 1}, {'$', 0x21, 1}, {'%', 0x22, 1}, {'^', 0x23, 1}, {'&', 0x24, 1},
+    {'*', 0x25, 1}, {'(', 0x26, 1}, {')', 0x27, 1}, {'-', 0x2D, 0}, {'_', 0x2D, 1}, {'=', 0x2E, 0}, {'+', 0x2E, 1},
+    {'[', 0x2F, 0}, {'{', 0x2F, 1}, {']', 0x30, 0}, {'}', 0x30, 1}, {'\\', 0x31, 0}, {'|', 0x31, 1}, {';', 0x33, 0},
+    {':', 0x33, 1}, {'\'', 0x34, 0}, {'"', 0x34, 1}, {'`', 0x35, 0}, {'~', 0x35, 1}, {',', 0x36, 0}, {'<', 0x36, 1},
+    {'.', 0x37, 0}, {'>', 0x37, 1}, {'/', 0x38, 0}, {'?', 0x38, 1},
+};
+// русская раскладка Windows/Android
+const Stroke STROKES_RU_PC[] = {
+    {'!', 0x1E, 1}, {'"', 0x1F, 1}, {';', 0x21, 1}, {'%', 0x22, 1}, {':', 0x23, 1}, {'?', 0x24, 1}, {'*', 0x25, 1},
+    {'(', 0x26, 1}, {')', 0x27, 1}, {'-', 0x2D, 0}, {'_', 0x2D, 1}, {'=', 0x2E, 0}, {'+', 0x2E, 1}, {'\\', 0x31, 0},
+    {'/', 0x31, 1}, {'.', 0x38, 0}, {',', 0x38, 1},
+};
+// русская раскладка macOS
+const Stroke STROKES_RU_MAC[] = {
+    {'!', 0x1E, 1}, {'"', 0x1F, 1}, {'%', 0x21, 1}, {':', 0x22, 1}, {',', 0x23, 1}, {'.', 0x24, 1}, {';', 0x25, 1},
+    {'(', 0x26, 1}, {')', 0x27, 1}, {'-', 0x2D, 0}, {'_', 0x2D, 1}, {'=', 0x2E, 0}, {'+', 0x2E, 1}, {'/', 0x38, 0},
+    {'?', 0x38, 1},
+};
+
+template <size_t N>
+const Stroke* findStroke(const Stroke (&table)[N], char c) {
+    for (const Stroke& st : table)
+        if (st.c == c) return &st;
+    return nullptr;
+}
+
+// символ слоя цифр; в русской раскладке нет @#$[]{}<> и др. — на время символа переключаем получателя на EN
+void typeChar(uint16_t c) {
+    clearSuggestions();
+    trackTyped(0x36, 0);
+    uint8_t mods = sticky;
+    sticky = 0;
+    if (c >= '0' && c <= '9') {
+        hid::tapKey(mods, c == '0' ? 0x27 : 0x1E + (c - '1'));
+    } else if (settings::get().lang == settings::EN) {
+        const Stroke* st = findStroke(STROKES_EN, char(c));
+        if (st) hid::tapKey(mods | (st->shift ? hid::MOD_SHIFT : 0), st->code);
+    } else {
+        const Stroke* st = settings::get().macHost ? findStroke(STROKES_RU_MAC, char(c)) : findStroke(STROKES_RU_PC, char(c));
+        if (st) {
+            hid::tapKey(mods | (st->shift ? hid::MOD_SHIFT : 0), st->code);
+        } else if ((st = findStroke(STROKES_EN, char(c)))) {
+            settings::sendHotkey();
+            delay(LANG_SWITCH_MS);
+            hid::tapKey(mods | (st->shift ? hid::MOD_SHIFT : 0), st->code);
+            settings::sendHotkey();
+            delay(LANG_SWITCH_MS);
+        }
+    }
+    if (mods) build();
 }
 
 void pressKey(uint8_t code) {
@@ -377,7 +501,42 @@ void typeWord(size_t i) {
     hid::tapKey(0, HK_SPACE);
 }
 
+void showPrompt(const char* text) {
+    if (promptCb) promptCb(text);
+}
+
+void showTrainWord(const char* note) {
+    char text[96];
+    snprintf(text, sizeof text, "%s%s (%d/%u)  " LV_SYMBOL_CLOSE, note, TRAIN_WORDS[trainIdx].text, trainIdx + 1,
+             unsigned(TRAIN_COUNT));
+    showPrompt(text);
+}
+
+// свайп в режиме тренировки: образец для калибровки, ничего не печатается
+void trainSwipe() {
+    const TrainWord& w = TRAIN_WORDS[trainIdx];
+    swipe::LetterKey keys[40];
+    int keyW;
+    size_t keyCount = letterKeys(w.lang, keys, 40, keyW);
+    if (!swipe::addSample(w.lang, path, pathLen, keys, keyCount, keyW, w.text, strlen(w.text))) {
+        showTrainWord("Еще раз: ");
+        return;
+    }
+    if (++trainIdx == int(TRAIN_COUNT)) {
+        trainIdx = -1;
+        showPrompt(nullptr);
+        return;
+    }
+    showTrainWord(LV_SYMBOL_OK " Теперь: ");
+}
+
 void finishSwipe() {
+    if (trainIdx >= 0) {
+        trainSwipe();
+        return;
+    }
+    memcpy(lastPath, path, pathLen * sizeof path[0]);
+    lastPathLen = pathLen;
     settings::Lang cur = settings::get().lang;
     settings::Lang other = cur == settings::RU ? settings::EN : settings::RU;
     swipe::Word words[2 * MAX_SUGGEST];
@@ -418,6 +577,7 @@ void finishSwipe() {
     lastCapital = shift != ShiftState::Off;
     lastAllCaps = shift == ShiftState::Locked;
     typeWord(0);
+    fix = Fix::AfterSwipe;
     sticky = 0;
     if (shift == ShiftState::Once) {
         shift = ShiftState::Off;
@@ -523,8 +683,10 @@ void onEvent(lv_event_t* e) {
             else
                 switchLang(true);
             break;
-        case Act::Sym: layer = 1; build(); break;
-        case Act::Abc: layer = 0; build(); break;
+        case Act::Char: typeChar(b.code); break;
+        case Act::Num: layer = LAYER_NUM; build(); break;
+        case Act::Fn: layer = LAYER_FN; build(); break;
+        case Act::Abc: layer = LAYER_ALPHA; build(); break;
         default: break;
     }
 }
@@ -610,14 +772,33 @@ void refresh() {
 
 void onSuggestions(SuggestCallback cb) { suggestCb = cb; }
 
+void onPrompt(PromptCallback cb) { promptCb = cb; }
+
+void startTraining() {
+    if (layer != LAYER_ALPHA) {
+        layer = LAYER_ALPHA;
+        build();
+    }
+    clearSuggestions();
+    trainIdx = 0;
+    showTrainWord("Проведи: ");
+}
+
+void stopTraining() {
+    trainIdx = -1;
+    showPrompt(nullptr);
+}
+
 void pickSuggestion(size_t i) {
     if (i == 0 || i >= suggestCount) return;
     for (size_t k = 0; k < lastTypedChars; k++) hid::tapKey(0, HK_BACKSPACE);
     std::swap(suggestPtrs[0], suggestPtrs[i]);
     std::swap(suggestLang[0], suggestLang[i]);
-    // выбранный вариант важнее автоматически набранного
+    // выбранный вариант важнее автоматически набранного; свайп — образец для калибровки
     swipe::learn(suggestLang[0], suggestPtrs[0], strlen(suggestPtrs[0]), 3);
+    sampleLastSwipe(suggestLang[0], suggestPtrs[0], strlen(suggestPtrs[0]));
     typeWord(0);
+    fix = Fix::AfterSwipe;
     notifySuggestions();
 }
 

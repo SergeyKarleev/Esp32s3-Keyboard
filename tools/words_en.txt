@@ -1,0 +1,52 @@
+# IT-лексика и интернет-сленг (EN): поднимаются в начало словаря свайпа.
+# Строка — слово и его формы через пробел; порядок строк — приоритет.
+
+# сленг переписки
+ok okay yep yeah nope lol lmao rofl btw imo imho afaik tbh idk brb omg wtf thx thanks pls plz np gg wp
+gonna wanna gotta kinda sorta dunno lemme gimme ya yo hey hi bye cya ttyl asap fyi tldr nvm irl dm dms
+cool nice awesome sure yup nah meh ugh hmm oops wow bruh dude guys cringe based vibe vibes meme memes
+emoji emojis selfie hashtag repost retweet tweet tweets like likes subscribe stream streams streamer
+noob newbie pro hype legit fake spam spammer bot bots troll trolling ban banned mod mods admin admins
+lag laggy ping afk gl hf ez rekt op nerf nerfed buff buffed
+
+# разработка
+code coding coder coders dev devs developer developers engineer engineers programmer programmers
+app apps application applications api apis sdk sdks ui ux backend frontend fullstack mobile web website
+server servers client clients service services microservice microservices endpoint endpoints request requests
+response responses json xml yaml html css js ts http https url urls uri rest graphql grpc websocket socket
+database databases db sql nosql postgres postgresql mysql sqlite mongo mongodb redis kafka query queries
+table tables schema schemas migration migrations index indexes cache caching cached
+git github gitlab bitbucket repo repos repository repositories branch branches commit commits committed committing
+merge merged merging rebase rebased rebasing push pushed pushing pull pulled pulling fetch checkout stash
+cherry pick diff diffs patch patches conflict conflicts tag tags release releases version versions
+pr prs mr review reviews reviewed reviewer approve approved lgtm nit nits
+build builds building built compile compiled compiling compiler linker deploy deployed deploying deployment deployments
+ci cd pipeline pipelines job jobs runner docker dockerfile container containers image images kubernetes
+kubectl helm pod pods cluster clusters node nodes nginx proxy load balancer cloud aws azure gcp
+staging prod production dev test tests testing tested unit integration mock mocks stub e2e qa
+bug bugs buggy fix fixes fixed fixing hotfix debug debugging debugger breakpoint crash crashes crashed
+log logs logging logger error errors exception exceptions stacktrace trace warning warnings
+feature features refactor refactoring refactored cleanup legacy hardcode hardcoded workaround hack hacky
+task tasks ticket tickets issue issues backlog sprint sprints standup daily retro scrum agile kanban jira
+confluence slack zoom meet call calls sync async await promise promises callback callbacks
+function functions method methods class classes object objects interface interfaces struct enum enums
+variable variables const let var string strings int integer float double bool boolean array arrays
+list lists map maps set dict tuple null nil undefined true false return import export module modules
+package packages library libraries lib libs framework frameworks dependency dependencies plugin plugins
+config configs configuration settings env environment variables secret secrets token tokens auth oauth
+login logout password user users admin role roles permission permissions session sessions cookie cookies
+thread threads coroutine coroutines lambda closure generic generics inheritance override
+param params parameter parameters argument arguments arg args callback handler handlers listener
+event events state props component components hook hooks render rendering layout view views
+kotlin java swift objc python javascript typescript rust golang go ruby php csharp cpp scala dart flutter
+react vue angular svelte node npm yarn pnpm gradle maven cargo pip venv conda webpack vite babel
+android ios macos linux ubuntu debian windows unix bash zsh shell terminal console cli ssh vim vscode
+xcode intellij idea studio emulator simulator device devices firmware esp arduino
+script scripts regex parser parsing serialize deserialize encode decode encoding utf
+file files folder folders directory path paths stdin stdout stderr pipe input output
+memory leak leaks heap stack pointer pointers buffer buffers cpu gpu ram disk ssd latency throughput
+performance optimize optimization benchmark profiling profiler scale scaling scalable
+security vulnerability exploit encryption decrypt hash hashing ssl tls cert certificate
+ai ml llm gpt chatgpt claude prompt prompts model models dataset training inference agent agents
+startup product manager pm team lead teamlead techlead cto ceo hr junior middle senior intern
+remote office onboarding offer salary interview interviews resume

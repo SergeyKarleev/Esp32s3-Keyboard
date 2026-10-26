@@ -61,6 +61,20 @@ UserWord userWords[MAX_USER_WORDS];
 bool dirty = false;
 uint32_t changedAt = 0;
 
+// калибровка под пользователя: систематический сдвиг пальца относительно центров клавиш (px)
+// и разброс пути вокруг ломаной слова (в ширинах клавиши); разброс расширяет допуски поиска
+struct Calibration {
+    float dx = 0, dy = 0;
+    float spread = 0.3f;
+    uint16_t samples = 0;
+};
+constexpr float SPREAD_NORMAL = 0.3f;
+constexpr uint16_t MAX_SAMPLES_WEIGHT = 30;  // старые образцы постепенно забываются
+Calibration calib;
+
+// во сколько раз расширить допуски: аккуратному пальцу строже, размашистому свободнее
+float tolerance() { return std::clamp(calib.spread / SPREAD_NORMAL, 0.8f, 1.6f); }
+
 struct FPoint {
     float x, y;
 };
@@ -166,6 +180,7 @@ struct Match {
     bool has[32] = {};
     FPoint user[N], dense[64];
     float kw = 1;
+    float missFree = MISS_FREE, missMax = MISS_MAX;
 
     // расстояние пути до ломаной через буквы слова [p, e), в ширинах клавиши; false — не подходит
     bool score(const char* p, const char* e, float& out) const {
@@ -184,8 +199,8 @@ struct Match {
         for (int i = 1; i < L - 1; i++) {
             float m = 1e9f;
             for (int j = 0; j < 64; j++) m = std::min(m, dist(tmpl[i], dense[j]));
-            if (m >= kw * MISS_MAX) return false;
-            miss += std::max(0.0f, m - kw * MISS_FREE);
+            if (m >= kw * missMax) return false;
+            miss += std::max(0.0f, m - kw * missFree);
         }
         resample(tmpl, L, tmplN, N);
         float sum = 0;
@@ -227,6 +242,15 @@ struct Best {
     }
 };
 
+// путь в float, не больше 256 точек; corrected — со снятым сдвигом калибровки
+size_t toRaw(const Point* path, size_t n, FPoint* raw, bool corrected) {
+    size_t rn = std::min<size_t>(n, 256);
+    float dx = corrected ? calib.dx : 0, dy = corrected ? calib.dy : 0;
+    for (size_t i = 0; i < rn; i++) raw[i] = {path[i * n / rn].x - dx, path[i * n / rn].y - dy};
+    raw[rn - 1] = {path[n - 1].x - dx, path[n - 1].y - dy};
+    return rn;
+}
+
 // ранг слова в словаре или NO_RANK
 uint32_t findRank(const Dict& d, const char* word, size_t len) {
     int f, l;
@@ -258,6 +282,12 @@ void loadUserWords() {
         n++;
     }
     Serial.printf("[swipe] %u learned words\n", n);
+    if (prefs.begin("words", true)) {
+        if (prefs.getBytesLength("calib") == sizeof calib) prefs.getBytes("calib", &calib, sizeof calib);
+        prefs.end();
+    }
+    Serial.printf("[swipe] calibration dx %.1f dy %.1f spread %.2f (%u samples)\n", calib.dx, calib.dy, calib.spread,
+                  calib.samples);
 }
 
 }  // namespace
@@ -301,17 +331,19 @@ size_t decode(settings::Lang lang, const Point* path, size_t n, const LetterKey*
         m.has[li] = true;
     }
 
+    // путь со снятым сдвигом пальца
     static FPoint raw[256];
-    size_t rn = std::min<size_t>(n, 256);
-    for (size_t i = 0; i < rn; i++) raw[i] = {float(path[i * n / rn].x), float(path[i * n / rn].y)};
-    raw[rn - 1] = {float(path[n - 1].x), float(path[n - 1].y)};
+    size_t rn = toRaw(path, n, raw, true);
     resample(raw, rn, m.user, N);
     resample(raw, rn, m.dense, 64);
 
     m.kw = float(keyW);
+    float tol = tolerance();
+    m.missFree = MISS_FREE * tol;
+    m.missMax = MISS_MAX * tol;
     int starts[4], ends[4];
-    int sn = nearKeys(m.user[0], m.centers, m.has, d.letters, m.kw * 1.3f, starts, 4);
-    int en = nearKeys(m.user[N - 1], m.centers, m.has, d.letters, m.kw * 1.3f, ends, 4);
+    int sn = nearKeys(m.user[0], m.centers, m.has, d.letters, m.kw * 1.3f * tol, starts, 4);
+    int en = nearKeys(m.user[N - 1], m.centers, m.has, d.letters, m.kw * 1.3f * tol, ends, 4);
 
     Best best;
     best.max = std::min<size_t>(maxOut, 8);
@@ -390,7 +422,66 @@ void poll() {
         stored[i].count = userWords[i].count;
     }
     prefs.putBytes("list", stored, sizeof stored);
+    prefs.putBytes("calib", &calib, sizeof calib);
     prefs.end();
+}
+
+bool addSample(settings::Lang lang, const Point* path, size_t n, const LetterKey* keys, size_t keyCount, int keyW,
+               const char* word, size_t len) {
+    const Dict& d = dicts[lang];
+    if (n < 2 || keyW <= 0) return false;
+    FPoint centers[32];
+    bool has[32] = {};
+    for (size_t i = 0; i < keyCount; i++) {
+        int li = letterIndex(d, keys[i].cp);
+        if (li < 0) continue;
+        centers[li] = {float(keys[i].center.x), float(keys[i].center.y)};
+        has[li] = true;
+    }
+    FPoint tmpl[MAX_WORD_KEYS], tmplN[N], user[N];
+    int L = 0, prev = -1;
+    for (const char *p = word, *e = word + len; p < e;) {
+        int li = letterIndex(d, nextCp(p, e));
+        if (li < 0 || !has[li]) return false;
+        if (li == prev) continue;
+        if (L == MAX_WORD_KEYS) return false;
+        tmpl[L++] = centers[li];
+        prev = li;
+    }
+    if (L < 2) return false;
+    static FPoint raw[256];
+    size_t rn = toRaw(path, n, raw, false);
+    resample(raw, rn, user, N);
+    resample(tmpl, L, tmplN, N);
+    float dx = 0, dy = 0;
+    for (int i = 0; i < N; i++) {
+        dx += user[i].x - tmplN[i].x;
+        dy += user[i].y - tmplN[i].y;
+    }
+    dx /= N;
+    dy /= N;
+    float spread = 0;
+    for (int i = 0; i < N; i++) spread += std::hypot(user[i].x - dx - tmplN[i].x, user[i].y - dy - tmplN[i].y);
+    spread /= N * float(keyW);
+    // путь совсем не похож на слово — не учимся на случайности
+    if (spread > 1.2f || std::hypot(dx, dy) > keyW) return false;
+    // скользящее среднее: первые образцы весят много, потом по 1/MAX_SAMPLES_WEIGHT
+    calib.samples = std::min<uint16_t>(calib.samples + 1, MAX_SAMPLES_WEIGHT);
+    float w = 1.0f / calib.samples;
+    calib.dx += (dx - calib.dx) * w;
+    calib.dy += (dy - calib.dy) * w;
+    calib.spread += (spread - calib.spread) * w;
+    Serial.printf("[swipe] sample '%.*s': dx %.1f dy %.1f spread %.2f -> calib %.1f %.1f %.2f\n", int(len), word, dx, dy,
+                  spread, calib.dx, calib.dy, calib.spread);
+    dirty = true;
+    changedAt = millis();
+    return true;
+}
+
+void resetCalibration() {
+    calib = Calibration{};
+    dirty = true;
+    changedAt = millis() - SAVE_DELAY_MS;
 }
 
 void forget() {
